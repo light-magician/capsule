@@ -15,3 +15,68 @@ target/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Ignore environment files at any depth
+**/*.env
+**/*.env.local
+**/*.env.development
+**/*.env.production
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Dependency directories and package managers
+**/node_modules/
+**/vendor/
+**/target/
+**/dist/
+**/build/
+
+# Compiled files
+**/*.exe
+**/*.out
+**/*.app
+**/*.dll
+**/*.so
+**/*.dylib
+
+# Python specific
+**/__pycache__/
+**/*.py[cod]
+*$py.class
+**/*.so
+**/.Python
+**/env/
+**/venv/
+**/.venv/
+**/.env/
+**/pip-log.txt
+**/pip-delete-this-directory.txt
+**/*.egg-info/
+**/.eggs/
+**/*.egg
+
+# Rust specific
+**/Cargo.lock
+**/*.rs.bk
+**/*.orig
+**/.cargo/
+**/debug/
+**/release/
+
+# Logs
+**/*.log
+**/logs/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

@@ -4,6 +4,9 @@
 
 # Capsule — Deterministic Security Layer for LLM Agents
 
+Docker isolates processes; Guardrails monitors text. Capsule enforces least-privilege at the tool-call level and yields a tamper-proof flight recorder.
+No existing stack offers all three layers cross-platform. Our open DSL becomes the standard; the compiler + log verifier are our bread and butter.
+
 ## Architecture & Demo Specification (v0.1, 2025-04-29)
 
 ---

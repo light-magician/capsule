@@ -80,3 +80,6 @@ target/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# use this file to summerize diffs
+**/changes.diff

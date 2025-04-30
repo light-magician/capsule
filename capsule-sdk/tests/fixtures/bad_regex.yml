@@ -1,0 +1,11 @@
+version: '0.1'
+tools:
+  oops_tool:
+    argv_pattern:
+      - '^convert$'
+      - '*[' # <-- INVALID regex: unescaped *
+    read:
+      - '/tmp/**/*.png'
+    write:
+      - '/tmp/**/*.jpg'
+    net: false

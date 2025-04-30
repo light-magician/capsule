@@ -1,0 +1,11 @@
+version: '0.1'
+tools:
+  sloppy_paths:
+    argv_pattern:
+      - '^grep$'
+      - '${PATTERN}'
+      - '${FILE}'
+    read:
+      - 'logs/**/*.log' # <-- relative path, should fail
+    write: []
+    net: false

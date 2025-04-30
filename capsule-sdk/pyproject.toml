@@ -3,15 +3,23 @@ name = "capsule-sdk"
 version = "0.1.0"
 description = ""
 authors = [
-    {name = "spiralClouds",email = "100466805+spiralClouds@users.noreply.github.com"}
+    {name = "lightmagician_",email = "jake.henderson.prof@gmail.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "pydantic (>=2.11.4,<3.0.0)",
+    "pyyaml (>=6.0.2,<7.0.0)"
 ]
 
 [tool.poetry]
 packages = [{include = "capsule_sdk", from = "src"}]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.5"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
 
 
 [build-system]

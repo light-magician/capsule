@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: capsule-runtime-dev:latest
+    container_name: capsule-dev
+    working_dir: /usr/src/app
+    volumes:
+      - .:/usr/src/app # sync host ↔ container
+    tty: true # allocate a pseudo-TTY
+    stdin_open: true # keep stdin open for `bash`
+    # you can override command on-the-fly, e.g.:
+    # command: ["cargo", "test"]

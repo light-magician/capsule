@@ -27,6 +27,16 @@ pub fn apply_seccomp_echo_only() -> Result<(), Box<dyn Error>> {
     // build the rule map: syscall -> empty Vec (match anything -> allow)
     let mut rules: BTreeMap<i64, Vec<_>> = BTreeMap::new();
     for &sc in &[
+        libc::SYS_execve,
+        libc::SYS_openat,
+        libc::SYS_newfstatat,
+        libc::SYS_mmap,
+        libc::SYS_mprotect,
+        libc::SYS_munmap,
+        libc::SYS_brk,
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        libc::SYS_arch_prctl,
+        libc::SYS_faccessat,
         libc::SYS_read,
         libc::SYS_write,
         libc::SYS_fstat,
@@ -42,7 +52,8 @@ pub fn apply_seccomp_echo_only() -> Result<(), Box<dyn Error>> {
     // https://docs.rs/seccompiler/latest/seccompiler/
     let filter: BpfProgram = SeccompFilter::new(
         rules,
-        SeccompAction::KillProcess,
+        SeccompAction::Trap,
+        //SeccompAction::KillProcess,
         SeccompAction::Allow,
         std::env::consts::ARCH.try_into()?,
     )

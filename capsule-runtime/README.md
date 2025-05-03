@@ -60,3 +60,9 @@ cargo build
 cargo test
 cargo run -- echo hello
 ```
+
+test with strace logging of syscalls
+
+```bash
+strace -ff -e trace=all /usr/src/app/target/debug/capsule-runtime echo hello
+```

@@ -2,31 +2,56 @@
 pub mod policy;
 pub mod sandbox;
 
+use anyhow::Result;
 use policy::Policy;
 use sandbox::apply_seccomp_echo_only;
+use std::env;
 use std::error::Error;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::os::unix::process::CommandExt;
+use std::process::{self, Command};
 
-fn main() -> Result<(), Box<dyn Error>> {
-    // collect args: capsule <cmd>
-    let mut args = std::env::args();
-    let _exe = args.next();
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("error: {}", e);
+        process::exit(1);
+    }
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = env::args();
+    let _prog = args.next();
+
     let cmd = match args.next() {
-        Some(cmd) => cmd,
+        Some(c) => c,
         None => {
-            eprintln("usage: capsule <cmd> [args...]");
-            std::process::exit(1);
+            eprintln!("Usage: capsule-runtime <command> [args...]");
+            process::exit(1);
         }
     };
-    // policy check
-    let rest: Vec<&str> = args.map(|s| s.as_str()).collect();
-    if !Policy::validate_call(&cmd, &rest) {
-        eprintln!("cmmand '{}' not allowed by policy", cmd);
-        std::process::exit(1);
+
+    let rest: Vec<String> = args.collect();
+    let rest_ref: Vec<&str> = rest.iter().map(String::as_str).collect();
+
+    if !Policy::validate_call(&cmd, &rest_ref) {
+        // write an ERROR entry before exiting
+        let mut log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("capsule.log")?;
+
+        writeln!(
+            log,
+            "ERROR: command '{} rejected by policy (no access to {})",
+            cmd,
+            rest_ref.join(" "),
+        )?;
+
+        eprintln!("Command '{}' not allowed by policy", cmd);
+        process::exit(1);
     }
-    // apply sandbox
-    apply_seccomp_echo_only();
-    // execute
-    let status = std::process::Command::new(cmd).args(&rest).status()?;
-    // TODO: append Merkle-chained audit log via blake3
-    std::process::exit(status.code().unwrap_or(1));
+    apply_seccomp_echo_only()?;
+    let status = process::Command::new(&cmd).args(&rest).status()?;
+    process::exit(status.code().unwrap_or(1));
 }

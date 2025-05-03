@@ -29,3 +29,34 @@ cargo run --bin capsule-runtime -- echo hello
 ```bash
 ./target/release/capsule-runtime echo hello
 ```
+
+### container
+
+We use Docker to ensure seccomp support and a consistent Rust toolchain.
+
+```bash
+docker-compose up --build -d
+```
+
+verify
+
+```bash
+docker ps
+```
+
+```
+CONTAINER ID   IMAGE                        COMMAND   CREATED              STATUS              PORTS     NAMES
+f0ba356a1761   capsule-runtime-dev:latest   "bash"    About a minute ago   Up About a minute             capsule-dev
+```
+
+exec into the container which now shares the file space with your project
+
+```bash
+docker exec -it capsule-dev bash
+```
+
+```bash
+cargo build
+cargo test
+cargo run -- echo hello
+```

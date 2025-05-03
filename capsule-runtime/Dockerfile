@@ -2,7 +2,7 @@
 # syntax=docker/dockerfile:1
 
 # 1. Base image with Rust (amd64/slim variant)
-FROM rust:1.71-slim-buster
+FROM rust:1.80-slim-bullseye
 
 # 2. Install system deps for seccomp (libseccomp-dev, pkg-config)
 RUN apt-get update \

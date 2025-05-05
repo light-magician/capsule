@@ -66,3 +66,25 @@ test with strace logging of syscalls
 ```bash
 strace -ff -e trace=all /usr/src/app/target/debug/capsule-runtime echo hello
 ```
+
+## Building & Installation CLI
+
+1. **Local build**:
+   ```bash
+   cargo build --release
+   # Binary at target/release/capsule
+   ```
+2. **Global install** (runs from anywhere):
+   ```bash
+   cargo install --path . --force
+   # Installs `capsule` into your cargo bin directory (usually ~/.cargo/bin)
+   ```
+3. **Usage**:
+
+   ```bash
+   # Run under sandbox
+   capsule run --policy capsule.yaml -- mcp-fs-server --root /data
+
+   # Verify an audit log
+   capsule verify /var/log/capsule.log
+   ```

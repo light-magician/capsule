@@ -1,4 +1,5 @@
 // src/main.rs
+mod log;
 mod policy;
 mod sandbox;
 use anyhow::Result;

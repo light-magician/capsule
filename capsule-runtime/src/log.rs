@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use blake3::{Hash, Hasher};
+use serde::de::{self, Deserializer, Error as DeError};
+use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs::File;
@@ -8,6 +10,7 @@ use std::io::{BufRead, BufReader};
 /// Represents one logged event with a link to the previous root
 #[derive(Serialize, Deserialize)]
 pub struct CapsuleEvent {
+    #[serde(serialize_with = "as_hex", deserialize_with = "from_hex")]
     pub parent_root: Hash,
     pub payload: Value,
 }
@@ -61,4 +64,19 @@ pub fn verify(logfile: &std::path::Path) -> Result<()> {
         hex::encode(last_root.as_bytes())
     );
     Ok(())
+}
+
+fn as_hex<S>(hash: &Hash, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&hash.to_hex().to_string())
+}
+
+fn from_hex<'de, D>(deserializer: D) -> Result<Hash, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    Hash::from_hex(&s).map_err(D::Error::custom)
 }

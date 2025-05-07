@@ -4,9 +4,8 @@ use serde::de::{self, Deserializer, Error as DeError};
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
 /// Represents one logged event with a link to the previous root
 #[derive(Serialize, Deserialize)]
 pub struct CapsuleEvent {
@@ -79,4 +78,31 @@ where
 {
     let s = String::deserialize(deserializer)?;
     Hash::from_hex(&s).map_err(D::Error::custom)
+}
+
+/// Appends an event to the log with hash
+pub fn append_event(event: &CapsuleEvent, log_path: &std::path::Path) -> Result<()> {
+    let hash = event.compute_hash();
+    let json = serde_json::to_string(event)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)?;
+    writeln!(file, "{}|{}", json, hash.to_hex())?;
+    Ok(())
+}
+
+/// Extracts the last hash in the log, or returns 0 hash if empty
+pub fn last_hash(log_path: &std::path::Path) -> Result<Hash> {
+    let file = File::open(log_path)?;
+    let reader = BufReader::new(file);
+    let mut last = Hash::from([0u8; 32]);
+    for line in reader.lines() {
+        let line = line?;
+        let (_event_json, hash_hex) = line
+            .split_once('|')
+            .context("Malformed log entry: missing '|'")?;
+        last = Hash::from_hex(hash_hex)?;
+    }
+    Ok(last)
 }

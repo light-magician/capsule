@@ -1,9 +1,10 @@
-/// simple policy: to only allow a specific set of commands
+// src/policy.rs
+/// A trivial policy: only allow the program named `"echo"`.
 pub struct Policy;
 
 impl Policy {
-    /// returns true if `cmd` is exactly "echo"
-    pub fn validate_call(cmd: &str, _args: &[&str]) -> bool {
-        cmd == "echo"
+    /// Returns true if `program` == `"echo"`.  All args are ignored.
+    pub fn validate(&self, program: &str, _args: &[String]) -> bool {
+        program == "echo"
     }
 }

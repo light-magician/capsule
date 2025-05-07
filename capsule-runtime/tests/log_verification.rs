@@ -1,14 +1,29 @@
-use std::fs::OpenOptions;
-use std::io::Write;
+// tests/log_verification.rs
 
-fn log_event(event: &CapsuleEvent) -> anyhow::Result<()> {
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("capsule.log")?;
+use capsule_runtime::log::verify;
+use capsule_runtime::runtime::run_command;
+use std::{fs, path::Path};
 
-    let json = serde_json::to_string(event)?;
-    let hash = event.compute_hash().to_hex().to_string();
-    writeln!(file, "{}|{}", json, hash)?;
-    Ok(())
+#[test]
+fn test_audit_log_hash_chain_valid() {
+    // 1. Clean up any old state
+    let _ = fs::remove_file("capsule.log");
+
+    // 2. Create an (empty) policy file so run_command can find it.
+    //    Our Policy impl ignores its contents anyway.
+    fs::write("capsule.yaml", "").unwrap();
+
+    // 3. Invoke the “echo hello” through the library
+    run_command(
+        Path::new("capsule.yaml"),
+        vec!["echo".into(), "hello".into()],
+    )
+    .expect("run_command failed");
+
+    // 4. Sanity: the log file must exist
+    let log_path = Path::new("capsule.log");
+    assert!(log_path.exists(), "capsule.log was not created");
+
+    // 5. Verify Merkle‐chain integrity
+    verify(log_path).expect("hash chain verification failed");
 }

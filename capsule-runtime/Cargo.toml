@@ -1,17 +1,24 @@
+# Cargo.toml
+
 [package]
 name = "capsule-runtime"
 version = "0.1.0"
 edition = "2021"
 
+# This tells Cargo to build a `capsule` binary from src/main.rs
+[[bin]]
+name = "capsule"
+path = "src/main.rs"
+
 [dependencies]
 anyhow   = "1.0.98"
 blake3   = "1.8.2"
 cap-std  = "3.4.4"
-clap = "4.5.37"
-hex = "0.4.3"
-libc = "0.2.172"
+clap     = { version = "4.5.37", features = ["derive"] }
+hex      = "0.4.3"
+libc     = "0.2.172"
 seccompiler = "0.5.0"
-serde = {version = "1.0.219", features = ["derive"]}
+serde    = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 
 [dev-dependencies]

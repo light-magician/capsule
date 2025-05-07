@@ -69,7 +69,7 @@ use std::{collections::BTreeMap, convert::TryInto, error::Error};
 ///     To be smarter later we will have to implement clever ways to flag unwanted
 ///     combinations. Even seemingly innocent syscalls made in the right succession
 ///     can allow the agent to do unwanted actions.
-pub fn apply_seccomp_echo_only() -> Result<(), Box<dyn Error>> {
+pub fn apply_seccomp() -> Result<(), Box<dyn Error>> {
     // build the rule map: syscall -> empty Vec (match anything -> allow)
     // TODO: note that we are not really definint "rules" yet but rather a syscall
     //       allowlist, and any combo no matter how dubios will pass through

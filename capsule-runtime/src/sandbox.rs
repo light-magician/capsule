@@ -18,8 +18,8 @@ use anyhow::Result;
 /// This crate provides high-level wrappers for working with syscall filtering.
 ///
 ///
-use seccompiler::{SeccompAction, SeccompFilter};
-use std::{collections::BTreeMap, error::Error};
+use seccompiler::{BpfProgram, SeccompAction, SeccompFilter, SeccompRule};
+use std::{collections::BTreeMap, convert::TryInto, error::Error};
 
 /// install a seccomp-BPF filter that kills the process
 /// on any syscall except: read, write, fstat, close, exit, exit_group
@@ -27,6 +27,16 @@ pub fn apply_seccomp_echo_only() -> Result<(), Box<dyn Error>> {
     // build the rule map: syscall -> empty Vec (match anything -> allow)
     let mut rules: BTreeMap<i64, Vec<_>> = BTreeMap::new();
     for &sc in &[
+        libc::SYS_execve,
+        libc::SYS_openat,
+        libc::SYS_newfstatat,
+        libc::SYS_mmap,
+        libc::SYS_mprotect,
+        libc::SYS_munmap,
+        libc::SYS_brk,
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        libc::SYS_arch_prctl,
+        libc::SYS_faccessat,
         libc::SYS_read,
         libc::SYS_write,
         libc::SYS_fstat,
@@ -34,16 +44,23 @@ pub fn apply_seccomp_echo_only() -> Result<(), Box<dyn Error>> {
         libc::SYS_exit,
         libc::SYS_exit_group,
     ] {
-        filter.add_rule(sc, SeccompAction::Allow)?;
+        // sc is an index, and its a vector of
+        rules.insert(sc as i64, Vec::new());
     }
     // create the filter: on match Allow; on mismatch: kill process
-    let filter = SeccompFilter::new(
+    // the doc on how this was built
+    // https://docs.rs/seccompiler/latest/seccompiler/
+    let filter: BpfProgram = SeccompFilter::new(
         rules,
-        SeccompAction::KillProcess,
-        SeccompActoin::Allow,
-        std::env::constants::ARCH.try_into()?,
-    )?;
+        SeccompAction::Trap,
+        //SeccompAction::KillProcess,
+        SeccompAction::Allow,
+        std::env::consts::ARCH.try_into()?,
+    )
+    .unwrap()
+    .try_into()
+    .unwrap();
     // enforce the filter immediately
-    filter.load()?;
+    seccompiler::apply_filter(&filter).unwrap();
     Ok(())
 }

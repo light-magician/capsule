@@ -1,0 +1,15 @@
+tree
+.
+├── capsule.log
+├── Cargo.lock
+├── Cargo.toml
+├── docker-compose.yml
+├── Dockerfile
+├── README.md
+├── src
+│   ├── cli.rs
+│   ├── lib.rs
+│   ├── log.rs
+│   ├── main.rs
+│   ├── policy.rs
+│   └── sandbox.rs

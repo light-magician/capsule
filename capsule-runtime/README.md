@@ -89,10 +89,17 @@ strace -ff -e trace=all /usr/src/app/target/debug/capsule-runtime echo hello
    capsule verify /var/log/capsule.log
    ```
 
-   ### Syscall tracing
+### Syscall tracing
 
-   using strace
+It is imperitive to know what syscalls happen underneath common
+terminal commands, so they can be allowed by the sandbox.
+It is also important to know the sequences so that diversion from those
+sequences can be flagged and the processes can be killed, fenced off,
+or sent back to the user in the form of an `in-the-loop` prompting.
 
-   ```bash
-   strace -ff -e trace=all -o trace.out capsule-runtime echo hello
-   ```
+using `strace` helps identify the basic sequence of syscalls that happen
+under the hood of a given command.
+
+```bash
+strace -ff -e trace=all -o trace.out capsule-runtime echo hello
+```

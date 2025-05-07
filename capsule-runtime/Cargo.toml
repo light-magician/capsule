@@ -1,16 +1,25 @@
 # Cargo.toml
+
 [package]
 name = "capsule"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "capsule_runtime"
+path = "src/lib.rs"
+
+[[bin]]
+name = "capsule"
+path = "src/main.rs"
+
 [dependencies]
-anyhow   = "1.0.98"
-blake3   = "1.8.2"
-cap-std  = "3.4.4"
-libc = "0.2.172"
-predicates = "3.1.3"
+anyhow      = "1.0.98"
+blake3      = "1.8.2"
+cap-std     = "3.4.4"
+libc        = "0.2.172"
 seccompiler = "0.5.0"
 
 [dev-dependencies]
 assert_cmd = "2.0.17"
+predicates = "3.1.3"

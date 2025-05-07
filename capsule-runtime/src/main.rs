@@ -9,6 +9,13 @@ use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::process::{exit, Command};
 
+/// implementes the capsule-runtime binary
+/// parses CLI args (<command> [args...])
+/// appends an "OK" or "error:" entry to capsule.log
+/// forks + execs the requested command, installing a seccomp-BPF in the child
+///     so that only a narrow set of syscalls (read, write, fastat, close, exit)
+///     are permitted
+/// exits with status of child process
 fn main() {
     if let Err(e) = run() {
         eprintln!("error: {}", e);

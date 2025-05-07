@@ -3,7 +3,7 @@ mod policy;
 mod sandbox;
 use anyhow::Result;
 use policy::Policy;
-use sandbox::apply_seccomp_echo_only;
+use sandbox::apply_seccomp;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::unix::process::CommandExt;
@@ -68,7 +68,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .args(&rest)
         .before_exec(|| {
             // this closure runs in the child _after_ fork() but _before_ execve()
-            apply_seccomp_echo_only()
+            apply_seccomp()
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
         })
         .status()?; // failure to fork/exec here will be returned as Err(_)

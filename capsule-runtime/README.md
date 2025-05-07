@@ -88,3 +88,11 @@ strace -ff -e trace=all /usr/src/app/target/debug/capsule-runtime echo hello
    # Verify an audit log
    capsule verify /var/log/capsule.log
    ```
+
+   ### Syscall tracing
+
+   using strace
+
+   ```bash
+   strace -ff -e trace=all -o trace.out capsule-runtime echo hello
+   ```

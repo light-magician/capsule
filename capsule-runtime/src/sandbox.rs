@@ -63,6 +63,12 @@ use std::{collections::BTreeMap, convert::TryInto, error::Error};
 
 /// install a seccomp-BPF filter that kills the process
 /// on any syscall except: read, write, fstat, close, exit, exit_group
+/// TODO: hat blunt approach leaves us vulnerable to all sorts of misuse—e.g.
+///     mapping executable memory, changing protections, or abusing openat to
+///     escape directories—because we’re not checking how those calls are made.
+///     To be smarter later we will have to implement clever ways to flag unwanted
+///     combinations. Even seemingly innocent syscalls made in the right succession
+///     can allow the agent to do unwanted actions.
 pub fn apply_seccomp_echo_only() -> Result<(), Box<dyn Error>> {
     // build the rule map: syscall -> empty Vec (match anything -> allow)
     let mut rules: BTreeMap<i64, Vec<_>> = BTreeMap::new();

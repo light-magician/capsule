@@ -71,7 +71,10 @@ use std::{collections::BTreeMap, convert::TryInto, error::Error};
 ///     can allow the agent to do unwanted actions.
 pub fn apply_seccomp_echo_only() -> Result<(), Box<dyn Error>> {
     // build the rule map: syscall -> empty Vec (match anything -> allow)
+    // TODO: note that we are not really definint "rules" yet but rather a syscall
+    //       allowlist, and any combo no matter how dubios will pass through
     let mut rules: BTreeMap<i64, Vec<_>> = BTreeMap::new();
+    // TODO: add description of what each allowed syscall facilitates
     for &sc in &[
         libc::SYS_execve,
         libc::SYS_openat,

@@ -83,3 +83,6 @@ Thumbs.db
 
 # use this file to summerize diffs
 **/changes.diff
+
+# hide all command traces logging
+**/cmd_traces/

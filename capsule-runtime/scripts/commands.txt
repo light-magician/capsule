@@ -1,0 +1,3 @@
+ls -l /
+echo "hello world"
+grep foo /var/log/syslog

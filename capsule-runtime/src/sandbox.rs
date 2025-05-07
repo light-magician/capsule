@@ -17,7 +17,47 @@ use anyhow::Result;
 ///
 /// This crate provides high-level wrappers for working with syscall filtering.
 ///
+/// A sandbox is a confined execution environment that restricts what resources and operations
+/// a process may access, limiting its ability to harm the host system. In our case, we apply
+/// a Linux seccomp-BPF sandbox, which installs a Berkeley Packet Filter (BPF) in the kernel
+/// to intercept every system call the process makes and decide—based on a whitelist—whether to
+/// allow or kill the process before the call ever executes sandbox.rs](file-service://file-86q3izkca7DbBftZbJDASn).
 ///
+/// A Berkeley Packet Filter (BPF) was originally designed for filtering network packets, but
+/// Linux’s seccomp subsystem repurposes BPF to filter system calls. We use the `seccompiler`
+/// crate to construct a BPF program that explicitly allows only a minimal set of syscalls
+/// (e.g., read, write, fstat, close, exit, execve, openat) and traps or kills everything else.
+/// This reduces the kernel-level attack surface to the bare minimum needed for the agent’s task sandbox.rs](file-service://file-86q3izkca7DbBftZbJDASn).
+///
+/// This level of safety is especially critical for an AI agent with filesystem access:
+/// even if the agent’s code or its tools are buggy or malicious, any attempt to open, write,
+/// spawn new processes, map memory, or perform network operations outside the approved list
+/// will be blocked at the syscall boundary, preventing unauthorized reads, writes, or escalations.
+///
+/// Compared to containers, which rely on higher-level abstractions like namespaces, cgroups,
+/// and chroots, seccomp-BPF sits deeper in the kernel. Containers isolate resources but still
+/// allow most syscalls by default for compatibility; a seccomp sandbox can enforce a
+/// strict, syscall-level policy regardless of filesystem or namespace configuration. This
+/// makes policy simpler to reason about, harder to bypass, and avoids the overhead and
+/// complexity of managing full container environments.
+///
+/// By running “closer” to the user’s machine—without a container hypervisor layer—we gain:
+///   1. **Finer-grained control**: We can precisely whitelist only the syscalls we trust, rather
+///      than relying on broad container defaults.
+///   2. **Lower overhead**: No extra filesystem layers or daemon processes; the filter lives
+///      entirely in the kernel alongside the process.
+///   3. **Stronger security guarantees**: Attack techniques that exploit lesser-known syscalls
+///      (e.g., mmap, mprotect, ptrace) are blocked outright.
+///
+/// Ultimately, this protects us from threats unique to local AI agents, such as:
+///   • Arbitrary code execution via JIT or dynamic linking  
+///   • Covert data exfiltration through unconventional syscalls  
+///   • Privilege escalation via unexpected kernel interfaces  
+///   • Side-effects on the host filesystem or network beyond what the policy permits  
+///
+/// Adding this low-level syscall filtering enables us to safely grant an AI agent direct,
+/// high-performance access to the user’s files, without exposing the full power of the kernel
+///—a degree of trust-and-verify that containers alone cannot provide.
 use seccompiler::{BpfProgram, SeccompAction, SeccompFilter, SeccompRule};
 use std::{collections::BTreeMap, convert::TryInto, error::Error};
 

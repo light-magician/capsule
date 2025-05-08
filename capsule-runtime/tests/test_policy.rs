@@ -11,32 +11,41 @@ use std::fs;
 
 #[test]
 fn permitted_cmd_allowed() {
-    // Invoke the CLI
-    let mut cmd = Command::cargo_bin("capsule").unwrap();
-    cmd.arg("echo").arg("hello");
-    cmd.assert().success().stdout("hello\n");
+    let log_file = "test_run.log";
+    let _ = fs::remove_file(log_file);
 
-    // Check that the audit log was written and contains our command
-    let log = fs::read_to_string("capsule.log").expect("failed to read capsule.log");
+    let mut cmd = Command::cargo_bin("capsule").unwrap();
+    cmd.env("CAPSULE_LOG", log_file)
+        .arg("echo")
+        .arg("hello")
+        .assert()
+        .success()
+        .stdout("hello\n");
+
+    let log = fs::read_to_string(log_file).unwrap();
     assert!(
-        log.contains("echo hello"),
-        "audit log did not contain expected entry; got:\n{}",
+        log.contains("\"cmd\":[\"echo\",\"hello\"]"),
+        "audit log did not contain InvocationStart; got:\n{}",
         log
     );
 }
 
 #[test]
 fn policy_rejects_non_permitted_cmd() {
-    // attempt to run `ls` → policy should block it before we ever exec()
+    let log_file = "test_run.log";
+    let _ = fs::remove_file(log_file);
+
     let mut cmd = Command::cargo_bin("capsule").unwrap();
-    cmd.arg("ls").arg("-l");
-    cmd.assert()
+    cmd.env("CAPSULE_LOG", log_file)
+        .arg("ls")
+        .arg("-l")
+        .assert()
         .failure()
         .stderr(predicate::str::contains("not allowed by policy"));
 
-    let log = fs::read_to_string("capsule.log").unwrap();
+    let log = fs::read_to_string(log_file).unwrap();
     assert!(
-        log.contains("ERROR: command 'ls' rejected by policy"),
+        log.contains("\"type\":\"invocation_end\"") && log.contains("\"status\":1"),
         "log didn’t record policy rejection: got\n{}",
         log
     );

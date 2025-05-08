@@ -57,7 +57,7 @@ docker exec -it capsule-dev bash
 
 ```bash
 cargo build
-cargo test
+cargo test -- --test-threads=1
 cargo run -- echo hello
 ```
 

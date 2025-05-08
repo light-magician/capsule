@@ -1,14 +1,17 @@
 // src/main.rs
+mod log;
 mod policy;
 mod sandbox;
 use anyhow::Result;
+use log::Logger;
 use policy::Policy;
 use sandbox::apply_seccomp;
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::os::unix::process::CommandExt;
-use std::process::{exit, Command};
-
+use std::{
+    env,
+    os::unix::process::CommandExt,
+    path::PathBuf,
+    process::{exit, Command},
+};
 /// implementes the capsule-runtime binary
 /// parses CLI args (<command> [args...])
 /// appends an "OK" or "error:" entry to capsule.log
@@ -24,55 +27,62 @@ fn main() {
 }
 
 /// Parses CLI args, enforces policy, logs activity, and runs the requested command
+/// NOTE: This is a temporary, ad-hoc dispatch.  
+/// TODO: Replace with a proper CLI parser (e.g. `clap`) so we can support subcommands cleanly.
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    // 1) Parse program name and command + args
-    let mut args = std::env::args();
+    // 1) Pick our log file
+    let log_path: PathBuf = env::var("CAPSULE_LOG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| env::current_dir().unwrap().join("capsule.log"));
+    let mut logger = Logger::new(&log_path)?;
+
+    // 2) Shallow arg parsing
+    let mut args = env::args();
     let _prog = args.next();
-    let cmd = match args.next() {
-        Some(c) => c,
-        None => {
-            eprintln!("Usage: capsule-runtime <command> [args...]");
-            exit(1);
-        }
-    };
+    let cmd = args.next().unwrap_or_else(|| {
+        eprintln!("Usage: capsule <command> [args...]");
+        exit(1);
+    });
     let rest: Vec<String> = args.collect();
     let rest_ref: Vec<&str> = rest.iter().map(String::as_str).collect();
 
-    // 2) Validate against policy
+    // 3) Handle our built-in `verify` BEFORE policy or sandbox
+    // TODO: this must be changed later
+    if cmd == "verify" {
+        if let Err(e) = Logger::verify_chain(&log_path) {
+            eprintln!("failed hash: {}", e);
+            exit(1);
+        }
+        println!("✔ All entries verified");
+        exit(0);
+    }
+
+    // 4) Normal invocation: log start
+    let mut full_cmd = Vec::with_capacity(1 + rest.len());
+    full_cmd.push(cmd.clone());
+    full_cmd.extend(rest.clone());
+    logger.log_invocation_start(full_cmd)?;
+
+    // 5) Policy check
     if !Policy::validate_call(&cmd, &rest_ref) {
-        let mut log = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("capsule.log")?;
-        writeln!(
-            log,
-            "ERROR: command '{}' rejected by policy (no access to {})",
-            cmd,
-            rest_ref.join(" ")
-        )?;
+        logger.log_invocation_end(1)?;
         eprintln!("error: command '{}' not allowed by policy", cmd);
         exit(1);
     }
 
-    // 3) Audit-log the allowed invocation
-    {
-        let mut log = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("capsule.log")?;
-        writeln!(log, "OK: {} {}", cmd, rest_ref.join(" "))?;
-    }
-
-    // 4) Spawn child with seccomp filter applied *only* in the child
-    let status = Command::new(&cmd)
-        .args(&rest)
-        .before_exec(|| {
-            // this closure runs in the child _after_ fork() but _before_ execve()
+    // 6) Fork+exec under seccomp
+    let mut child = Command::new(&cmd);
+    child.args(&rest);
+    unsafe {
+        child.pre_exec(|| {
             apply_seccomp()
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-        })
-        .status()?; // failure to fork/exec here will be returned as Err(_)
+        });
+    }
+    let status = child.status()?; // wait for the child
 
-    // 5) Exit with the same code as the child process
-    exit(status.code().unwrap_or(1));
+    // 7) Log end, propagate exit code
+    let code = status.code().unwrap_or(1);
+    logger.log_invocation_end(code)?;
+    exit(code);
 }

@@ -1,0 +1,19 @@
+# capsule.yaml
+id: 'git.clone'
+description: 'Clone a public repo read-only.'
+argv_pattern: ['git', 'clone', '*']
+sandbox:
+  read:
+    - 'https://github.com/**' # network allow list
+    - '/etc/ssl/certs/**' # TLS root CAs
+  write: [] # must not write to disk
+  net:
+    - mode: 'tcp'
+      dest_port: 443
+  syscalls:
+    deny:
+      - unlinkat # cannot delete files
+      - mprotect: # cannot toggle RX
+          if_prot: 'EXEC'
+audit:
+  redact_args: [3] # hash repo URL for privacy

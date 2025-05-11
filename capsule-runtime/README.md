@@ -12,6 +12,13 @@ cargo build
 cargo build --release
 ```
 
+Be sure if you need to replace the contents of
+`capsule` to run the following...
+
+```bash
+cargo install --path . --force
+```
+
 3. Run your CLI (debug build)
 
 ```bash

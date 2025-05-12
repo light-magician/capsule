@@ -9,49 +9,46 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Enforce policy + sandbox + exec
+    /// Run one command under Capsule (policy + seccomp + Merkle log)
     Run {
         command: String,
         args: Vec<String>,
 
+        /// log file (default $CAPSULE_LOG or ./capsule.log)
         #[arg(long, env = "CAPSULE_LOG", default_value = "capsule.log")]
         log: String,
 
-        /// Path to a policy file, or the word `none` (default = none)
+        /// policy file or literal `none`  (default none = unrestricted)
         #[arg(long)]
         policy: Option<String>,
     },
 
-    /// Verify integrity of an existing log
+    /// Verify an existing log
     Verify {
-        /// log file path, defaults to ./capsule.log or $CAPSULE_LOG
         #[arg(long, env = "CAPSULE_LOG", default_value = "capsule.log")]
         log: String,
     },
 
-    /// Profile syscalls for a list of commands
+    /// Profile a newline-separated list of commands
     Profile {
         input: String,
-        #[arg(long)]
+        #[arg(long, default_value = "profiles")]
         out_dir: String,
     },
 
-    /// (stub) run as a long-lived daemon
-    /// Start a long-lived tracing daemon
+    /// Start the always-on daemon (defaults shown)
     Daemon {
-        /// Unix-socket path (default /tmp/capsule.sock)
         #[arg(long, default_value = "/tmp/capsule.sock")]
         socket: String,
 
         #[arg(long, env = "CAPSULE_LOG", default_value = "capsule.log")]
         log: String,
 
-        /// Policy file or `none` (default none = unrestricted)
         #[arg(long)]
         policy: Option<String>,
     },
 
-    /// Catch-all for bare invocations (so `capsule echo …` still works)
+    /// So that `capsule echo …` still works
     #[command(external_subcommand)]
     External(Vec<String>),
 }

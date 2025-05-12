@@ -7,7 +7,6 @@ use std::{
     fs::{self, File},
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::Command,
 };
 
 #[derive(Serialize)]
@@ -93,4 +92,41 @@ pub fn profile_commands(input_path: &str, out_dir: &str) -> Result<()> {
     );
 
     Ok(())
+}
+
+// ─── reusable one-command tracer ───────────────────────────────────────────
+use std::process::Command; // already in scope earlier
+
+pub fn trace_single(cmd: &str, args: &[String], trace_dir: &Path) -> anyhow::Result<Vec<String>> {
+    use std::{
+        collections::HashSet,
+        fs,
+        io::{BufRead, BufReader},
+    };
+
+    fs::create_dir_all(trace_dir)?;
+    let ts = chrono::Local::now().format("%Y%m%dT%H%M%S").to_string();
+    let file = trace_dir.join(format!("{}_{}.log", cmd.replace('/', "_"), ts));
+
+    Command::new("strace")
+        .args(&["-f", "-e", "trace=all", "-o", file.to_str().unwrap(), cmd])
+        .args(args)
+        .status()?;
+
+    let fd = fs::File::open(&file)?;
+    let mut uniq = HashSet::new();
+    for line in BufReader::new(fd).lines().flatten() {
+        if let Some(p) = line.find('(') {
+            uniq.insert(
+                line[..p]
+                    .split_whitespace()
+                    .last()
+                    .unwrap_or("")
+                    .to_string(),
+            );
+        }
+    }
+    let mut list: Vec<_> = uniq.into_iter().collect();
+    list.sort();
+    Ok(list)
 }

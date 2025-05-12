@@ -13,9 +13,13 @@ pub enum Commands {
     Run {
         command: String,
         args: Vec<String>,
-        /// log file path, defaults to ./capsule.log or $CAPSULE_LOG
+
         #[arg(long, env = "CAPSULE_LOG", default_value = "capsule.log")]
         log: String,
+
+        /// Path to a policy file, or the word `none` (default = none)
+        #[arg(long)]
+        policy: Option<String>,
     },
 
     /// Verify integrity of an existing log
@@ -33,9 +37,18 @@ pub enum Commands {
     },
 
     /// (stub) run as a long-lived daemon
+    /// Start a long-lived tracing daemon
     Daemon {
-        #[arg(long)]
+        /// Unix-socket path (default /tmp/capsule.sock)
+        #[arg(long, default_value = "/tmp/capsule.sock")]
         socket: String,
+
+        #[arg(long, env = "CAPSULE_LOG", default_value = "capsule.log")]
+        log: String,
+
+        /// Policy file or `none` (default none = unrestricted)
+        #[arg(long)]
+        policy: Option<String>,
     },
 
     /// Catch-all for bare invocations (so `capsule echo …` still works)

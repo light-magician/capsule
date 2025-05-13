@@ -7,6 +7,7 @@ use std::{
     fs::{self, File},
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
+    process::Command,
 };
 
 #[derive(Serialize)]
@@ -93,9 +94,6 @@ pub fn profile_commands(input_path: &str, out_dir: &str) -> Result<()> {
 
     Ok(())
 }
-
-// ─── reusable one-command tracer ───────────────────────────────────────────
-use std::process::Command; // already in scope earlier
 
 pub fn trace_single(cmd: &str, args: &[String], trace_dir: &Path) -> anyhow::Result<Vec<String>> {
     use std::{

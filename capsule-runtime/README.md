@@ -16,7 +16,10 @@ Be sure if you need to replace the contents of
 `capsule` to run the following...
 
 ```bash
-cargo install --path . --force
+cargo install --path . --force # puts the release build into ~/.cargo/bin
+hash -r                        # refresh shell’s command cache
+capsule echo hello             # now uses the new code
+
 ```
 
 3. Run your CLI (debug build)

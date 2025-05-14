@@ -1,12 +1,11 @@
-// src/profile.rs
 use anyhow::Result;
 use chrono::Local;
 use serde::Serialize;
 use std::{
-    collections::HashSet,
+    env,
     fs::{self, File},
     io::{BufRead, BufReader},
-    path::{Path, PathBuf},
+    path::Path,
     process::Command,
 };
 
@@ -16,24 +15,22 @@ struct Entry {
     syscalls: Vec<String>,
 }
 
-/// For each line in `input_path` (a newline-separated list of shell commands),
-/// runs strace, captures the syscalls, writes per-command `.log` files
-/// into `out_dir`, then emits a single summary JSON in `out_dir`.
-pub fn profile_commands(input_path: &str, out_dir: &str) -> Result<()> {
-    // 0. Base name
-    let path = Path::new(input_path);
+fn main() -> Result<()> {
+    // 0. Input file and base name
+    let input_path = env::args().nth(1).unwrap_or_else(|| "commands.txt".into());
+    let path = Path::new(&input_path);
     let base = path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("commands");
 
-    // 1. Timestamp & ensure output directory exists
+    // 1. Timestamp and output dir
     let ts = Local::now().format("%Y%m%dT%H%M%S").to_string();
-    let out_dir = PathBuf::from(out_dir);
+    let out_dir = Path::new("cmd_traces");
     fs::create_dir_all(&out_dir)?;
 
-    // 2. Read all commands
-    let content = fs::read_to_string(input_path)?;
+    // 2. Read commands
+    let content = fs::read_to_string(&input_path)?;
     let mut results = Vec::new();
 
     for (i, raw) in content.lines().enumerate() {
@@ -42,7 +39,7 @@ pub fn profile_commands(input_path: &str, out_dir: &str) -> Result<()> {
             continue;
         }
 
-        // 3. Trace each command
+        // 3. Trace log per command
         let trace_file = out_dir.join(format!("{}_{}_{}.log", base, ts, i));
         let status = Command::new("strace")
             .args(&[
@@ -61,10 +58,10 @@ pub fn profile_commands(input_path: &str, out_dir: &str) -> Result<()> {
             eprintln!("⚠️  `{}` exited with {:?}", cmd, status);
         }
 
-        // 4. Parse unique syscall names
+        // 4. Parse syscalls
         let file = File::open(&trace_file)?;
         let reader = BufReader::new(file);
-        let mut seen = HashSet::new();
+        let mut seen = std::collections::HashSet::new();
         for line in reader.lines() {
             let line = line?;
             if let Some(pos) = line.find('(') {
@@ -75,16 +72,15 @@ pub fn profile_commands(input_path: &str, out_dir: &str) -> Result<()> {
         syscalls.sort();
 
         results.push(Entry {
-            command: cmd.to_string(),
+            command: cmd.into(),
             syscalls,
         });
     }
 
-    // 5. Serialize summary JSON
+    // 5. Write summary JSON into cmd_traces/
     let json_file = out_dir.join(format!("{}_{}.json", base, ts));
     let pretty = serde_json::to_string_pretty(&results)?;
     fs::write(&json_file, pretty)?;
-
     println!(
         "✅ Wrote {} entries\n  • logs: {}/\n  • summary: {}",
         results.len(),
@@ -93,38 +89,4 @@ pub fn profile_commands(input_path: &str, out_dir: &str) -> Result<()> {
     );
 
     Ok(())
-}
-
-pub fn trace_single(cmd: &str, args: &[String], trace_dir: &Path) -> anyhow::Result<Vec<String>> {
-    use std::{
-        collections::HashSet,
-        fs,
-        io::{BufRead, BufReader},
-    };
-
-    fs::create_dir_all(trace_dir)?;
-    let ts = chrono::Local::now().format("%Y%m%dT%H%M%S").to_string();
-    let file = trace_dir.join(format!("{}_{}.log", cmd.replace('/', "_"), ts));
-
-    Command::new("strace")
-        .args(&["-f", "-e", "trace=all", "-o", file.to_str().unwrap(), cmd])
-        .args(args)
-        .status()?;
-
-    let fd = fs::File::open(&file)?;
-    let mut uniq = HashSet::new();
-    for line in BufReader::new(fd).lines().flatten() {
-        if let Some(p) = line.find('(') {
-            uniq.insert(
-                line[..p]
-                    .split_whitespace()
-                    .last()
-                    .unwrap_or("")
-                    .to_string(),
-            );
-        }
-    }
-    let mut list: Vec<_> = uniq.into_iter().collect();
-    list.sort();
-    Ok(list)
 }

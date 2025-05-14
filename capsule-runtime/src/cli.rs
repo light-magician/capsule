@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "capsule", version, about)]
+#[command(name = "capsule", version)]
 pub struct Cli {
     #[command(subcommand)]
     pub cmd: Commands,
@@ -9,36 +9,21 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Enforce policy + sandbox + exec
-    Run {
-        command: String,
-        args: Vec<String>,
-        /// log file path, defaults to ./capsule.log or $CAPSULE_LOG
-        #[arg(long, env = "CAPSULE_LOG", default_value = "capsule.log")]
-        log: String,
-    },
-
-    /// Verify integrity of an existing log
-    Verify {
-        /// log file path, defaults to ./capsule.log or $CAPSULE_LOG
-        #[arg(long, env = "CAPSULE_LOG", default_value = "capsule.log")]
-        log: String,
-    },
-
-    /// Profile syscalls for a list of commands
-    Profile {
-        input: String,
-        #[arg(long)]
-        out_dir: String,
-    },
-
-    /// (stub) run as a long-lived daemon
+    /// Start the daemon (binds /tmp/capsule.sock)
     Daemon {
-        #[arg(long)]
+        #[arg(long, default_value = "/tmp/capsule.sock")]
         socket: String,
+        #[arg(long, env = "CAPSULE_LOG", default_value = "capsule.log")]
+        log: String,
+        #[arg(long)]
+        policy: Option<String>,
     },
-
-    /// Catch-all for bare invocations (so `capsule echo …` still works)
+    /// Verify capsule.log
+    Verify {
+        #[arg(long, env = "CAPSULE_LOG", default_value = "capsule.log")]
+        log: String,
+    },
+    /// Shortcut: `capsule echo hello`
     #[command(external_subcommand)]
     External(Vec<String>),
 }

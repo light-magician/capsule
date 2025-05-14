@@ -139,24 +139,3 @@ blake3 (fast, strong)
 License
 Apache-2.0 for core
 
-Testing
-
-Policy compiler
-Unit â€“ valid/invalid YAML fixtures
-pytest
-Runtime happy-path
-Unit â€“ convert & grep succeed
-cargo test
-Deny rules
-Integration â€“ attempt network, forbidden path
-Red-team script (tests/red_team.sh)
-Log integrity
-Unit â€“ corrupt one entry; verifier fails
-cargo test
-Performance
-Bench â€“ cold-start <200 ms
-Criterion benchmark
-CVE smoke
-cargo audit, pip-audit
-â€”
-

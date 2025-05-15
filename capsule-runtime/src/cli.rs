@@ -1,29 +1,24 @@
 use clap::{Parser, Subcommand};
 
+const PID_FILE: &str = "/tmp/capsule.pid";
+const SOCKET_PATH: &str = "/tmp/capsule.sock";
+
 #[derive(Parser)]
-#[command(name = "capsule", version)]
+#[command(name = "capsule-daemon")]
 pub struct Cli {
     #[command(subcommand)]
-    pub cmd: Commands,
+    pub cmd: Command,
 }
 
 #[derive(Subcommand)]
-pub enum Commands {
-    /// Start the daemon (binds /tmp/capsule.sock)
+pub enum Command {
+    /// Run as background daemon
     Daemon {
-        #[arg(long, default_value = "/tmp/capsule.sock")]
-        socket: String,
-        #[arg(long, env = "CAPSULE_LOG", default_value = "capsule.log")]
-        log: String,
         #[arg(long)]
-        policy: Option<String>,
+        daemon: bool,
     },
-    /// Verify capsule.log
-    Verify {
-        #[arg(long, env = "CAPSULE_LOG", default_value = "capsule.log")]
-        log: String,
-    },
-    /// Shortcut: `capsule echo hello`
-    #[command(external_subcommand)]
-    External(Vec<String>),
+    /// Stop the running daemon (gracefully via socket, fallback to SIGTERM)
+    Shutdown,
+    /// Verify daemon is running
+    Status,
 }

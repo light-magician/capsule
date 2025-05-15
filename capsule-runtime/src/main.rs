@@ -3,6 +3,7 @@ mod daemon;
 
 use clap::Parser;
 use cli::Cli;
+use daemon::{start_daemon, status, stop_daemon};
 
 fn main() {
     let cli = Cli::parse();

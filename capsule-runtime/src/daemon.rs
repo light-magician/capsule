@@ -2,17 +2,19 @@ use chrono::Local;
 use daemonize::Daemonize;
 use nix::sys::signal::{kill, SIGTERM};
 use nix::unistd::Pid;
+use std::fs::remove_file;
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::{fs, process};
-
 const PID_FILE: &str = "/tmp/capsule.pid";
 const OUT_LOG: &str = "/tmp/capsule.out";
 const ERR_LOG: &str = "/tmp/capsule.err";
 const SOCKET_PATH: &str = "/tmp/capsule.sock";
 
-fn start_daemon() {
+pub fn start_daemon() {
     /// using the daemonizer crate to make a daemon more easily
     /// handles ->
     /// - double forking:
@@ -110,7 +112,7 @@ fn start_daemon() {
     }
 }
 
-fn stop_daemon() {
+pub fn stop_daemon() {
     //TODO: Not prod quality
     //Relying on SIGTERM via kill is a temporary workaround
     //
@@ -151,7 +153,7 @@ fn stop_daemon() {
     remove_file(SOCKET_PATH).ok();
 }
 
-fn status() {
+pub fn status() {
     // Check PID file existence
     if Path::new(PID_FILE).exists() {
         // Attempt socket status query

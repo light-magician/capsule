@@ -1,141 +1,103 @@
-![alt text](capsule.png)
-# Capsule — Deterministic Security Layer for LLM Agents
-Agent security in one annotation.
-Restrict agent access and tool call execution at the syscall level. 
-Containers isolate processes. 
-Capsule enforces least-privilege at the tool-call level and yields a tamper-proof flight recorder.
+# Capsule
 
+<img src="capsule.png" alt="Capsule logo" width="400" />
 
-## Architecture & Demo Specification (v0.1, 2025-04-29)
+Capsule is an open‑core security runtime designed for teams embedding AI‑driven agents into development, data and production workflows. It compiles a human‑readable `capsule.yaml` policy into an OS‑native sandbox (Seccomp on Linux, Seatbelt on macOS), executes each agent tool invocation under that fine‑grained syscall filter, and writes a tamper‑evident Merkle–chained audit log of every action.
 
----
+## Who Is Capsule For?
 
-## 0 · Purpose & Non-Goals
+* **AI Platform Engineers & DevOps** who need to safely integrate untrusted AI agents into CI/CD, cloud and on‑prem environments without proliferating bespoke container or VM configurations.
+* **Security & Compliance Teams** that require cryptographic audit trails of every automated task an agent performs, with verifiable detection of tampering or unauthorized calls.
+* **Dev Teams & Data Scientists** demanding low‑latency, local execution of AI assistants on sensitive codebases or customer data, without surrendering security controls to opaque container runtimes or high‑privilege daemons.
 
-| Item                                                       | In scope by **2025-05-13**               | Out of scope (later)                 |
-| ---------------------------------------------------------- | ---------------------------------------- | ------------------------------------ |
-| Protect host OS & data from autonomous agent misuse        | ✅                                       | Kernel exploits, memory-safe runtime |
-| Fine-grained capability policy (tool + args + paths + net) | ✅                                       | GPU/devfs isolation                  |
-| Cryptographically verifiable audit log                     | ✅                                       | Remote attestation service           |
-| Cross-platform sandbox (macOS + Linux)                     | ✅ (macOS Seatbelt **or** Linux seccomp) | Windows WDAC                         |
-| Integration with a LangGraph Python agent                  | ✅                                       | GUIs, Gateway SaaS, billing          |
+## Hair‑On‑Fire Problem
 
----
+As organizations race to embed AI agents directly into their code, infrastructure and data‑processing pipelines, they face an explosion of fragmented sandboxing and logging solutions:
 
-## 1 · High-Level Diagram
+1. **Containers & VMs** ship broad syscall whitelists by default, leaving unknown kernel interfaces exposed and requiring cumbersome image maintenance.
+2. **Custom seccomp rules** are often scattered across projects, lacking a unified policy language or automated audit logging.
+3. **Opaque agent runtimes** obscure what code and syscalls an AI can invoke, undermining compliance and forensic investigations.
 
----
+These gaps create critical attack vectors—arbitrary code execution, covert data exfiltration via unconventional syscalls, privilege escalation through forgotten interfaces, and undetectable post‑hoc tampering of audit records.
 
-## 2 · Key Components
+## Why Capsule Works
 
-| ID     | Component                  | Language | Crates / Py libs                                               | Purpose                                               |
-| ------ | -------------------------- | -------- | -------------------------------------------------------------- | ----------------------------------------------------- |
-| **C1** | `capsule.yaml`             | YAML     | —                                                              | Human-authored capability DSL                         |
-| **C2** | Policy Compiler            | Python   | `pydantic`, `pyyaml`, `rstr`                                   | Validate & emit `policy.json`                         |
-| **C3** | Runtime / CLI              | Rust     | `cap-std`, `seccomp`, `blake3`, `serde_json`, `anyhow`, `clap` | Enforce policy, execute tool, append log              |
-| **C4** | Sandbox Adapter            | Rust     | `libseccomp-sys`, `roll::seatbelt` (stub)                      | Generate per-tool syscall / mount rules               |
-| **C5** | Merkle Log                 | Rust     | `blake3`, `serde_json`                                         | Append `{parent_hash, entry}`; output JSONL           |
-| **C6** | Verifier CLI               | Rust     | same as C5                                                     | Replay log, validate chain and policy conformity      |
-| **C7** | Python SDK (`capsule_sdk`) | Python   | `subprocess`, `inspect`                                        | Decorator `@capsule.tool(...)` that shells out to CLI |
-| **C8** | Demo Agent Fork            | Python   | `langgraph`, `rich`                                            | Replace direct `subprocess.run` with SDK              |
+* **Human‑Readable Policy, Machine‑Enforced**: Define a concise YAML policy once (`capsule.yaml`). The Python SDK validates syntax and emits a JSON policy for the Rust CLI.
+* **Syscall‑Level Isolation**: Seccomp‑BPF filters in the kernel enforce only the syscalls your agents need—no containers, no extra daemons, minimal overhead and no hidden gaps.
+* **Cryptographic Audit Trail**: Every invocation and syscall event is appended to `capsule.log` as a Blake3–Merkle chain. Any insertion, deletion or modification is immediately detectable via `capsule verify`.
+* **Unified Tooling**: The same `capsule run` CLI and `@capsule.tool` Python decorator handle policy enforcement, sandbox setup, execution, logging and verification—no scattered scripts.
+
+*Compared to stitching together Dockerfiles, custom AppArmor profiles, and ad‑hoc loggers, Capsule offers a consolidated, end‑to‑end security architecture that’s easier to reason about, lighter to maintain, and stronger against kernel‑level exploits.*
 
 ---
 
-## 3 · `capsule.yaml` v0.1 Schema (example)
+## Quick Start
 
-````yaml
-version: 0.1
-tools:
-  convert_png_jpg:
-    argv_pattern: ["convert", "${SRC:regex:^.*\\.png$}", "${DST:regex:^.*\\.jpg$}"]
-    read:  ["/Users/alice/Pictures/**/*.png"]
-    write: ["/Users/alice/Pictures/**/*.jpg"]
-    net: false
-  grep_logs:
-    argv_pattern: ["grep", "${PATTERN}", "${FILE:regex:^/var/log/.*\\.log$}"]
-    read:  ["/var/log/**/*.log"]
-    write: []
-    net: false
-
-compiler output `policy.json`
-```json
-{
-  "tool": "convert_png_jpg",
-  "argv_regex": ["^convert$", "^.*\\.png$", "^.*\\.jpg$"],
-  "read": ["/Users/alice/Pictures"],
-  "write": ["/Users/alice/Pictures"],
-  "net": false,
-  "hash": "sha256:f2b3…"
-}
-````
-
-runtime flow sdk call
-
-```Python
-@capsule.tool("convert_png_jpg")
-def resize(src: str, dst: str):
-    pass  # body ignored; runtime executes
-```
+### Building from Source
 
 ```bash
-capsule run \
-  --policy-hash f2b3… \
-  --json '{"argv": ["convert","a.png","b.jpg"]}'
+# Clone and build
+git clone https://github.com/yourorg/capsule.git
+cd capsule
+cargo build --release
 ```
 
-runtime steps
-1
-Load policy.json; verify hash matches input --policy-hash.
-2
-Regex-match argv vs policy.
-3
-Apply seccomp filter: whitelist read, write, fstat, etc.
-4
-Bind-mount allowed paths (-o ro or rw).
-5
-Spawn child via std::process::Command.
-6
-Append log entry â†’ ~/.capsule/log.jsonl.
-7
-Return child exit status + stdout/stderr to SDK.
-
-log entry
-
-```json
-{
-  "ts": "2025-05-01T12:00:03Z",
-  "parent": "eeae…",
-  "entry": {
-    "tool": "convert_png_jpg",
-    "argv": ["convert", "a.png", "b.jpg"],
-    "exit": 0,
-    "stdout_hash": "sha256:…",
-    "stderr_hash": "sha256:…"
-  }
-}
-```
-
-verifier CLI
+### Running a Command
 
 ```bash
-capsule verify ~/.capsule/log.jsonl
-> OK (58 entries, root a1f2…)
+# Enforce policy + sandbox + log to ./capsule.log
+./target/release/capsule run echo "hello world"
 ```
 
-Dependencies and toolchain
+### Verifying the Audit Log
 
-Domain
-Tooling
-Rust
-rustc 1.78, cargo, clippy, rustfmt
-Python
-python 3.11, poetry, mypy, ruff
-Sandbox libs
-libseccomp (Linux), seatbelt.h via Security.framework (macOS stub)
-Build/CI
-GitHub Actions (Ubuntu + macOS runners), cargo test, pytest
-Hashes
-blake3 (fast, strong)
-License
-Apache-2.0 for core
+```bash
+# Verify integrity of capsule.log
+./target/release/capsule verify
+```
 
+### Profiling Syscalls
+
+```bash
+# Generate syscall profiles for a list of commands
+./target/release/capsule profile commands.txt --out-dir sysprofile/
+```
+
+---
+
+## Docker
+
+Build and run with Docker or Docker Compose:
+
+```bash
+# Build image
+docker build -t capsule .
+
+# Run a command inside the sandbox
+docker run --rm -v $(pwd):/workspace capsule run ls -l
+```
+
+```yaml
+# docker-compose.yml
+version: '3'
+services:
+  capsule:
+    build: .
+    volumes:
+      - ./:/workspace
+    entrypoint: ["capsule", "run"]
+    command: ["echo", "Hello from Docker"]
+```
+
+---
+
+## Running Tests
+
+```bash
+# Unit & integration tests
+eval "$(rustup which --toolchain stable)" && cargo test
+```
+
+---
+
+For more details on policy syntax, sandbox customization and SDK integration, see the [docs/](docs/) directory or browse the source in `src/`.

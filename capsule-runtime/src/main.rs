@@ -1,5 +1,6 @@
 mod cli;
 mod daemon;
+mod log;
 
 use clap::Parser;
 use cli::Cli;

@@ -1,18 +1,26 @@
+use crate::log::start_rpc_logger;
 use chrono::Local;
 use daemonize::Daemonize;
 use nix::sys::signal::{kill, SIGTERM};
 use nix::unistd::Pid;
+use serde::Deserialize;
 use std::fs::remove_file;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-use std::{fs, process};
+use std::process::Command;
+use std::{fs, process, thread};
 const PID_FILE: &str = "/tmp/capsule.pid";
 const OUT_LOG: &str = "/tmp/capsule.out";
 const ERR_LOG: &str = "/tmp/capsule.err";
 const SOCKET_PATH: &str = "/tmp/capsule.sock";
+
+#[derive(Deserialize)]
+struct RunRequest {
+    cmd: Vec<String>,
+}
 
 pub fn start_daemon() {
     /// using the daemonizer crate to make a daemon more easily
@@ -37,76 +45,88 @@ pub fn start_daemon() {
     ///     write's the daemons process ID to a file
     ///     for management of process
     // prepare log files for stdout and stderr
-    let stdout = File::create("/tmp/capsule.out").unwrap_or_else(|e| {
-        eprintln!("stdout log error: {}", e);
-        process::exit(1)
-    });
-    let stderr = File::create("/tmp/capsule.err").unwrap_or_else(|e| {
-        eprintln!("stderr log error: {}", e);
-        process::exit(1)
-    });
-
-    let daemonize = Daemonize::new()
-        .pid_file("/tmp/capsule.pid")
-        .stdout(stdout)
-        .stderr(stderr);
-
-    match daemonize.start() {
-        Ok(_) => {
-            let now = Local::now().format("%Y-%m-%d %H:%M:%S");
-            println!("{} Daemon started on /tmp/capsule.sock", now);
-        }
-        Err(e) => {
-            eprintln!("failed to daemonize: {}", e);
+    // 1) daemonize the process
+    Daemonize::new()
+        .pid_file(PID_FILE)
+        .chown_pid_file(true)
+        .start()
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to daemonize: {}", e);
             process::exit(1);
+        });
+
+    // 2) launch the logger thread
+    thread::spawn(|| {
+        if let Err(e) = start_rpc_logger() {
+            eprintln!("Logger thread failed: {}", e);
         }
-    }
+    });
 
-    // Remove old socket if exists
+    // 3) ensure old socket is gone, then bind
     if Path::new(SOCKET_PATH).exists() {
-        let _ = remove_file(SOCKET_PATH);
+        fs::remove_file(SOCKET_PATH).ok();
     }
-
-    // Bind to Unix domain socket
     let listener = UnixListener::bind(SOCKET_PATH).unwrap_or_else(|e| {
-        eprintln!("failed to bind socket: {}", e);
+        eprintln!("Failed to bind {}: {}", SOCKET_PATH, e);
         process::exit(1);
     });
 
-    // Set permissions so other processes can connect if needed (optional)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(SOCKET_PATH).unwrap().permissions();
-        perms.set_mode(0o766);
-        fs::set_permissions(SOCKET_PATH, perms).unwrap_or_default();
-    }
-
-    // Event loop: accept connections for status or shutdown
+    // 4) main RPC loop
     for stream in listener.incoming() {
         match stream {
             Ok(mut sock) => {
-                let mut buf = [0u8; 16];
-                // Read command message
+                let mut buf = [0u8; 2048];
                 if let Ok(n) = sock.read(&mut buf) {
+                    if n == 0 {
+                        continue;
+                    }
                     let msg = String::from_utf8_lossy(&buf[..n]).trim().to_string();
-                    if msg == "shutdown" {
-                        // Client requested graceful shutdown
-                        let now = Local::now().format("%Y-%m-%d %H:%M:%S");
-                        let mut log_file = OpenOptions::new().append(true).open(OUT_LOG).unwrap();
-                        writeln!(log_file, "{} Daemon stopping via socket", now).ok();
-                        // Cleanup
-                        let _ = remove_file(PID_FILE);
-                        let _ = remove_file(SOCKET_PATH);
-                        process::exit(0);
-                    } else if msg == "status" {
-                        // Respond to status
-                        let _ = sock.write_all("running".as_bytes());
+
+                    match msg.as_str() {
+                        "status" => {
+                            let _ = sock.write_all(b"running");
+                        }
+                        "shutdown" => {
+                            let now = Local::now().format("%Y-%m-%d %H:%M:%S");
+                            let mut lf = OpenOptions::new().append(true).open(OUT_LOG).unwrap();
+                            writeln!(lf, "{} Daemon stopping via socket", now).ok();
+                            break;
+                        }
+                        _ => {
+                            // try JSON decode
+                            if let Ok(req) = serde_json::from_str::<RunRequest>(&msg) {
+                                // spawn the requested command
+                                let out = OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(OUT_LOG)
+                                    .unwrap();
+                                let err = OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(ERR_LOG)
+                                    .unwrap();
+                                let args = req.cmd.clone();
+                                thread::spawn(move || {
+                                    let _ = Command::new(&args[0])
+                                        .args(&args[1..])
+                                        .stdout(out)
+                                        .stderr(err)
+                                        .spawn();
+                                });
+                            } else {
+                                // unrecognized payload → log it
+                                let now = Local::now().format("%Y-%m-%d %H:%M:%S");
+                                let mut lf = OpenOptions::new().append(true).open(OUT_LOG).unwrap();
+                                writeln!(lf, "{} Unrecognized request: {}", now, msg).ok();
+                            }
+                        }
                     }
                 }
             }
-            Err(err) => {
-                eprintln!("socket accept error: {}", err);
+            Err(e) => {
+                eprintln!("Failed to accept connection: {}", e);
+                continue;
             }
         }
     }
@@ -123,6 +143,8 @@ pub fn stop_daemon() {
     // handles stop signals cleanly
 
     // First try graceful shutdown via socket
+    // ---- spawn logger thread -----------------
+
     if let Ok(mut stream) = UnixStream::connect(SOCKET_PATH) {
         // Send shutdown message
         let _ = stream.write_all(b"shutdown");

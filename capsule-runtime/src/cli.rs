@@ -21,4 +21,14 @@ pub enum Command {
     Shutdown,
     /// Verify daemon is running
     Status,
+
+    Run {
+        /// args for that program
+        #[arg(
+            value_name = "CMD…",
+            num_args = 1..,
+            trailing_var_arg = true
+        )]
+        cmd: Vec<String>,
+    },
 }

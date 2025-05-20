@@ -1,9 +1,11 @@
 mod cli;
+mod client;
 mod daemon;
 mod log;
 
 use clap::Parser;
 use cli::Cli;
+use client::send_run_request;
 use daemon::{start_daemon, status, stop_daemon};
 
 fn main() {
@@ -12,5 +14,12 @@ fn main() {
         cli::Command::Daemon { .. } => daemon::start_daemon(),
         cli::Command::Shutdown => daemon::stop_daemon(),
         cli::Command::Status => daemon::status(),
+        cli::Command::Run { cmd } => {
+            if let Err(err) = send_run_request(cmd) {
+                //TODO: should not break here
+                eprintln!("failed to send run request: {}", err);
+                std::process::exit(1);
+            }
+        }
     }
 }

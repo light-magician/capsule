@@ -1,4 +1,6 @@
 // src/lib.rs
+pub mod client;
+pub mod daemon;
 pub mod log;
 pub mod policy;
 pub mod profile;

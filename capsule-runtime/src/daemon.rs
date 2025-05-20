@@ -1,3 +1,4 @@
+use crate::constants::{ERR_LOG, OUT_LOG, PID_FILE, SOCKET_PATH};
 use crate::log::start_rpc_logger;
 use chrono::Local;
 use daemonize::Daemonize;
@@ -12,10 +13,6 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::process::Command;
 use std::{fs, process, thread};
-const PID_FILE: &str = "/tmp/capsule.pid";
-const OUT_LOG: &str = "/tmp/capsule.out";
-const ERR_LOG: &str = "/tmp/capsule.err";
-const SOCKET_PATH: &str = "/tmp/capsule.sock";
 
 #[derive(Deserialize)]
 struct RunRequest {

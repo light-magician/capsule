@@ -1,8 +1,8 @@
 mod cli;
 mod client;
+mod constants;
 mod daemon;
 mod log;
-
 use clap::Parser;
 use cli::Cli;
 use client::send_run_request;

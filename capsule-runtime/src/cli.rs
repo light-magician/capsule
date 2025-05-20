@@ -13,11 +13,16 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum DaemonAction {
     // start daemon in background
-    Start,
+    Start {
+        #[clap(long)]
+        watch: bool,
+    },
     // stop running daemon
     Stop,
     // view status info about daemon state
     Status,
+    // watch underlying syscalls with no filtering
+    Watch,
 }
 
 #[derive(Subcommand)]
@@ -39,6 +44,13 @@ pub enum Command {
             num_args = 1..,
             trailing_var_arg = true
         )]
+        cmd: Vec<String>,
+    },
+
+    Watch {
+        //TODO: I think watch should be a flag probably. Its the same as start
+        // the command to run while in watch mode
+        #[clap(required = true)]
         cmd: Vec<String>,
     },
 }

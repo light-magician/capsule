@@ -81,9 +81,11 @@ pub fn start_daemon() {
                     let msg = String::from_utf8_lossy(&buf[..n]).trim().to_string();
 
                     match msg.as_str() {
+                        // TODO: these codes need to be consolidated as constants
                         "status" => {
                             let _ = sock.write_all(b"running");
                         }
+                        // TODO: this needs to be consolidated
                         "shutdown" => {
                             let now = Local::now().format("%Y-%m-%d %H:%M:%S");
                             let mut lf = OpenOptions::new().append(true).open(OUT_LOG).unwrap();
@@ -114,6 +116,7 @@ pub fn start_daemon() {
                                 });
                             } else {
                                 // unrecognized payload → log it
+                                // TODO: consolidate log formatting for consistency -> constants
                                 let now = Local::now().format("%Y-%m-%d %H:%M:%S");
                                 let mut lf = OpenOptions::new().append(true).open(OUT_LOG).unwrap();
                                 writeln!(lf, "{} Unrecognized request: {}", now, msg).ok();

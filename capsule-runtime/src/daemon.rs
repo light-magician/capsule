@@ -72,6 +72,7 @@ pub fn start_daemon() {
     for stream in listener.incoming() {
         match stream {
             Ok(mut sock) => {
+                // TODO: take look at this buff length
                 let mut buf = [0u8; 2048];
                 if let Ok(n) = sock.read(&mut buf) {
                     if n == 0 {

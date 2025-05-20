@@ -5,13 +5,18 @@ mod daemon;
 mod log;
 use clap::Parser;
 use cli::Cli;
+use cli::DaemonAction;
 use client::send_run_request;
 use daemon::{start_daemon, status, stop_daemon};
 
 fn main() {
     let cli = Cli::parse();
     match cli.cmd {
-        cli::Command::Daemon { .. } => daemon::start_daemon(),
+        cli::Command::Daemon { action } => match action {
+            DaemonAction::Start => start_daemon(),
+            DaemonAction::Stop => stop_daemon(),
+            DaemonAction::Status => status(),
+        },
         cli::Command::Shutdown => daemon::stop_daemon(),
         cli::Command::Status => daemon::status(),
         cli::Command::Run { cmd } => {

@@ -1,3 +1,4 @@
+use crate::constants;
 use crate::log;
 use serde::Serialize;
 use std::env;
@@ -40,11 +41,13 @@ pub fn send_run_request(cmd: Vec<String>) -> io::Result<()> {
     let payload = serde_json::to_vec(&req)?;
 
     // send to control socket
-    let mut control = UnixStream::connect("/tmp/capsule.sock")?;
+    // TODO: should be a match here to alert as to nature of connection failure
+    // TODO: should also be a cert based handshake process here
+    let mut control = UnixStream::connect(constants::SOCKET_PATH)?;
     control.write_all(&payload)?;
 
     // fire-and-forget to logger socket
-    if let Ok(mut logger) = UnixStream::connect("/tmp/capsule-logger.sock") {
+    if let Ok(mut logger) = UnixStream::connect(constants::LOGGER_SOCKET_PATH) {
         let _ = logger.write_all(&payload);
     }
 

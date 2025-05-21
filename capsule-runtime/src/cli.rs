@@ -1,8 +1,9 @@
-/// this is the command line interface definitions
-/// it uses the clap library to define
-/// the command and subcommand API's
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
+use serde::{Deserialize, Serialize};
+//TODO: subcommands of capsule daemon not showing in capsule --help output
 
+/// Command-line interface for Capsule
 #[derive(Parser)]
 #[command(name = "capsule")]
 pub struct Cli {
@@ -10,21 +11,18 @@ pub struct Cli {
     pub cmd: Command,
 }
 
+/// Actions for controlling the daemon
 #[derive(Subcommand)]
 pub enum DaemonAction {
-    // start daemon in background
-    Start {
-        #[clap(long)]
-        watch: bool,
-    },
-    // stop running daemon
+    /// Start the background daemon
+    Start,
+    /// Stop the running daemon
     Stop,
-    // view status info about daemon state
+    /// Show daemon status
     Status,
-    // watch underlying syscalls with no filtering
-    Watch,
 }
 
+/// Top-level commands supported by the CLI
 #[derive(Subcommand)]
 pub enum Command {
     /// Run as background daemon
@@ -32,25 +30,14 @@ pub enum Command {
         #[command(subcommand)]
         action: DaemonAction,
     },
-    /// Stop the running daemon (gracefully via socket, fallback to SIGTERM)
-    Shutdown,
-    /// Verify daemon is running
-    Status,
-
+    /// Execute a program and trace its syscalls
     Run {
-        /// args for that program
+        /// Program and arguments to execute
         #[arg(
-            value_name = "CMD…",
+            value_name = "CMD...",
             num_args = 1..,
             trailing_var_arg = true
         )]
-        cmd: Vec<String>,
-    },
-
-    Watch {
-        //TODO: I think watch should be a flag probably. Its the same as start
-        // the command to run while in watch mode
-        #[clap(required = true)]
         cmd: Vec<String>,
     },
 }

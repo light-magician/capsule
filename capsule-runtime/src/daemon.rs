@@ -175,6 +175,8 @@ struct RunRequest {
 }
 
 fn execute_command(cmd: &[String]) -> Result<Output> {
+    // TODO: what is best practice for where these commands should be executed on the container?
+    // where this is executed will matter relative to the client process
     Command::new(&cmd[0])
         .args(&cmd[1..])
         .stdin(Stdio::null())

@@ -8,19 +8,28 @@ use serde::Deserialize;
 use std::fs::remove_file;
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::{Read, Result, Write};
+use std::io::{Error, ErrorKind, Read, Result, Write};
+use std::net::Shutdown;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::process::{exit, Command, Output, Stdio};
 use std::{fs, thread};
-
+// placeholder struct for the string array that
+// comes in from the client. Likely a command or random
+// text.
+#[derive(Deserialize)]
+struct RunRequest {
+    cmd: Vec<String>,
+}
 // start the capsule daemon:
 // fork & detach
 // spawn RPC logger thread
 // bund UDS & set perms
 // accept + handle each client
 pub fn start_daemon() -> Result<()> {
+    // remove a stale Process ID file if present
+    let _ = std::fs::remove_file(PID_FILE);
     // daemonize: detach, write PID, redirect stdout/stderr
     Daemonize::new()
         .pid_file(PID_FILE)
@@ -44,7 +53,7 @@ pub fn start_daemon() -> Result<()> {
         .start()
         .unwrap_or_else(|e| {
             eprintln!("Failed to daemonize: {}", e);
-            process::exit(1);
+            exit(1);
         });
 
     thread::spawn(|| {
@@ -71,7 +80,7 @@ pub fn start_daemon() -> Result<()> {
     Ok(())
 }
 
-pub fn stop_daemon() {
+pub fn stop_daemon() -> Result<()> {
     //TODO: Not prod quality
     //Relying on SIGTERM via kill is a temporary workaround
     //
@@ -86,7 +95,7 @@ pub fn stop_daemon() {
         // Send shutdown message
         let _ = stream.write_all(b"shutdown");
         println!("Sent shutdown command to daemon via socket");
-        return;
+        return Ok(());
     }
 
     // If socket unavailable, fallback to PID/SIGTERM
@@ -110,28 +119,31 @@ pub fn stop_daemon() {
     remove_file(PID_FILE).ok();
     // Optionally remove socket if left behind
     remove_file(SOCKET_PATH).ok();
+    Ok(())
 }
 
-pub fn status() {
-    // Check PID file existence
+pub fn status() -> Result<()> {
+    // if there is no PID, its not running
     if Path::new(PID_FILE).exists() {
-        // Attempt socket status query
         if let Ok(mut stream) = UnixStream::connect(SOCKET_PATH) {
-            // Send status message
-            let _ = stream.write_all(b"status");
+            // send the literal "status" query
+            stream.write_all(b"status")?;
+            // close the write-half so the daemon's read_to_string() will return
+            stream.shutdown(Shutdown::Write)?;
+            // read daemon's reply to a string
             let mut resp = String::new();
-            if stream.read_to_string(&mut resp).is_ok() && resp == "running" {
+            stream.read_to_string(&mut resp)?;
+            // if daemon answer's "running", echo the PID
+            if resp.trim() == "running" {
                 let pid = fs::read_to_string(PID_FILE).unwrap_or_default();
-                println!("Running (PID {})", pid.trim());
-                return;
+                println!("capsule daemon running (PID {})", pid.trim());
+                return Ok(());
             }
         }
     }
-    println!("Not running");
-}
-#[derive(Deserialize)]
-struct RunRequest {
-    cmd: Vec<String>,
+    // fallback, either socket failed or reply wasn't running
+    println!("capsule daemon not running ...");
+    Ok(())
 }
 
 fn execute_command(cmd: &[String]) -> Result<Output> {
@@ -183,14 +195,29 @@ fn run_request(req: RunRequest) -> Result<()> {
 /// 3. log the JSON text
 /// 4. spawn the child with piped stdout/stderr
 /// 5. copy from those pipes back into the socket
-fn handle_client(mut sock: UnixStream) -> io::Result<()> {
+fn handle_client(mut sock: UnixStream) -> Result<()> {
     // 1. Read JSON request until client closes the write half
     let mut buf = String::new();
     sock.read_to_string(&mut buf)?;
+    // short circuit for status and shutdown
+    let message = buf.trim_end();
+    match message {
+        "status" => {
+            // client asked “are you alive?”
+            sock.write_all(b"running")?;
+            return Ok(());
+        }
+        "shutdown" => {
+            // client asked us to exit
+            sock.write_all(b"shutting down")?;
+            std::process::exit(0);
+        }
+        _ => {} // otherwise fall through to JSON path
+    }
 
     // 2. Deserialize command
     let req: RunRequest =
-        serde_json::from_str(&buf).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        serde_json::from_str(&buf).map_err(|e| Error::new(ErrorKind::Other, e))?;
 
     // 3. Log raw request for auditing
     let mut logf = fs::OpenOptions::new()

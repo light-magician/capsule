@@ -3,20 +3,20 @@ mod client;
 mod constants;
 mod daemon;
 mod log;
-mod protocol;
 use clap::Parser;
 use cli::Cli;
 use cli::DaemonAction;
 use client::send_run_request;
 use daemon::{start_daemon, status, stop_daemon};
+use std::io::Result;
 
-fn main() {
+fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         cli::Command::Daemon { action } => match action {
-            DaemonAction::Start => start_daemon(),
-            DaemonAction::Stop => stop_daemon(),
-            DaemonAction::Status => status(),
+            DaemonAction::Start => start_daemon()?,
+            DaemonAction::Stop => stop_daemon()?,
+            DaemonAction::Status => status()?,
         },
         cli::Command::Run { cmd } => {
             if let Err(err) = send_run_request(cmd) {
@@ -26,4 +26,5 @@ fn main() {
             }
         }
     }
+    Ok(())
 }

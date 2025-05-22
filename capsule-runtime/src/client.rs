@@ -3,6 +3,7 @@ use crate::log;
 use serde::Serialize;
 use std::env;
 use std::io::{self, Read, Write};
+use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::process::{Command, Stdio};
 
@@ -43,13 +44,18 @@ pub fn send_run_request(cmd: Vec<String>) -> io::Result<()> {
     // send to control socket
     // TODO: should be a match here to alert as to nature of connection failure
     // TODO: should also be a cert based handshake process here
-    let mut control = UnixStream::connect(constants::SOCKET_PATH)?;
-    control.write_all(&payload)?;
-
-    // fire-and-forget to logger socket
-    if let Ok(mut logger) = UnixStream::connect(constants::LOGGER_SOCKET_PATH) {
-        let _ = logger.write_all(&payload);
+    let mut socket = UnixStream::connect(constants::SOCKET_PATH)?;
+    socket.write_all(&payload)?;
+    // signal shutdown
+    socket.shutdown(Shutdown::Write)?;
+    // read back the streamed stdout stderr until EOF
+    let mut buf = [0u8; 4096];
+    loop {
+        let n = socket.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        io::stdout().write_all(&buf[..n])?;
     }
-
     Ok(())
 }

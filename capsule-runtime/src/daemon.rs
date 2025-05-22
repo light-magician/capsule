@@ -120,8 +120,6 @@ pub fn stop_daemon() {
     // handles stop signals cleanly
 
     // First try graceful shutdown via socket
-    // ---- spawn logger thread -----------------
-
     if let Ok(mut stream) = UnixStream::connect(SOCKET_PATH) {
         // Send shutdown message
         let _ = stream.write_all(b"shutdown");
@@ -213,6 +211,75 @@ fn run_request(req: RunRequest) -> Result<()> {
             writeln!(logf, "{} Failed to spawn `{}`: {}", now, cmd_line, e)?;
         }
     }
+
+    Ok(())
+}
+
+/// handle one client connectoin
+/// - read request
+/// - log it
+/// - spawn child with piped stdout/stderr
+/// - stream stdout/stderr in chunks
+/// - send exitcode then close
+fn handle_client(mut stream: UnixStream) -> Result<()> {
+    let req: request = read_frame(&mut stream)?;
+    info!("incoming command: {:?}", req);
+    let mut child = Command::new(&req.cmd[0])
+        .args(&req.cmd[1..])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    // stdout thread
+    if let Some(mut out) = child.stdout.take() {
+        let mut w = stream.try_clone()?;
+        thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = out.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                let _ = write_frame(
+                    &mut w,
+                    &ResponseFrame {
+                        channel: Stream::Stdout,
+                        data: Some(buf[..n].to_vec()),
+                    },
+                );
+            }
+        });
+    }
+
+    // stderr thread
+    if let Some(mut err) = child.stderr.take() {
+        let mut w = stream.try_clone()?;
+        thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = err.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                let _ = write_frame(
+                    &mut w,
+                    &ResponseFrame {
+                        channel: Stream::Stderr,
+                        data: Some(buf[..n].to_vec()),
+                    },
+                );
+            }
+        });
+    }
+
+    // wait and send exit code
+    let status = child.wait()?;
+    let code = status.code().unwrap_or(-1);
+    write_frame(
+        &mut stream,
+        &ResponseFrame {
+            channel: Stream::ExitCode(code),
+            data: None,
+        },
+    )?;
 
     Ok(())
 }

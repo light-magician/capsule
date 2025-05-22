@@ -17,8 +17,6 @@ fn main() {
             DaemonAction::Stop => stop_daemon(),
             DaemonAction::Status => status(),
         },
-        cli::Command::Shutdown => daemon::stop_daemon(),
-        cli::Command::Status => daemon::status(),
         cli::Command::Run { cmd } => {
             if let Err(err) = send_run_request(cmd) {
                 //TODO: should not break here

@@ -8,16 +8,11 @@ use serde::Deserialize;
 use std::fs::remove_file;
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::{Read, Write};
+use std::io::{Read, Result, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-use std::process::Command;
-use std::{fs, process, thread};
-
-#[derive(Deserialize)]
-struct RunRequest {
-    cmd: Vec<String>,
-}
+use std::process::{exit, Command, Output, Stdio};
+use std::{fs, thread};
 
 pub fn start_daemon() {
     /// using the daemonizer crate to make a daemon more easily
@@ -49,7 +44,7 @@ pub fn start_daemon() {
         .start()
         .unwrap_or_else(|e| {
             eprintln!("Failed to daemonize: {}", e);
-            process::exit(1);
+            exit(1);
         });
 
     // 2) launch the logger thread
@@ -65,14 +60,13 @@ pub fn start_daemon() {
     }
     let listener = UnixListener::bind(SOCKET_PATH).unwrap_or_else(|e| {
         eprintln!("Failed to bind {}: {}", SOCKET_PATH, e);
-        process::exit(1);
+        exit(1);
     });
 
     // 4) main RPC loop
     for stream in listener.incoming() {
         match stream {
             Ok(mut sock) => {
-                // TODO: take look at this buff length
                 let mut buf = [0u8; 2048];
                 if let Ok(n) = sock.read(&mut buf) {
                     if n == 0 {
@@ -81,11 +75,9 @@ pub fn start_daemon() {
                     let msg = String::from_utf8_lossy(&buf[..n]).trim().to_string();
 
                     match msg.as_str() {
-                        // TODO: these codes need to be consolidated as constants
                         "status" => {
                             let _ = sock.write_all(b"running");
                         }
-                        // TODO: this needs to be consolidated
                         "shutdown" => {
                             let now = Local::now().format("%Y-%m-%d %H:%M:%S");
                             let mut lf = OpenOptions::new().append(true).open(OUT_LOG).unwrap();
@@ -93,30 +85,15 @@ pub fn start_daemon() {
                             break;
                         }
                         _ => {
-                            // try JSON decode
+                            // JSON → offload to run_request (preserves old logging)
                             if let Ok(req) = serde_json::from_str::<RunRequest>(&msg) {
-                                // spawn the requested command
-                                let out = OpenOptions::new()
-                                    .create(true)
-                                    .append(true)
-                                    .open(OUT_LOG)
-                                    .unwrap();
-                                let err = OpenOptions::new()
-                                    .create(true)
-                                    .append(true)
-                                    .open(ERR_LOG)
-                                    .unwrap();
-                                let args = req.cmd.clone();
                                 thread::spawn(move || {
-                                    let _ = Command::new(&args[0])
-                                        .args(&args[1..])
-                                        .stdout(out)
-                                        .stderr(err)
-                                        .spawn();
+                                    if let Err(e) = run_request(req) {
+                                        eprintln!("run_request error: {}", e);
+                                    }
                                 });
                             } else {
                                 // unrecognized payload → log it
-                                // TODO: consolidate log formatting for consistency -> constants
                                 let now = Local::now().format("%Y-%m-%d %H:%M:%S");
                                 let mut lf = OpenOptions::new().append(true).open(OUT_LOG).unwrap();
                                 writeln!(lf, "{} Unrecognized request: {}", now, msg).ok();
@@ -127,7 +104,6 @@ pub fn start_daemon() {
             }
             Err(e) => {
                 eprintln!("Failed to accept connection: {}", e);
-                continue;
             }
         }
     }
@@ -156,17 +132,17 @@ pub fn stop_daemon() {
     // If socket unavailable, fallback to PID/SIGTERM
     let pid_str = fs::read_to_string(PID_FILE).unwrap_or_else(|e| {
         eprintln!("Could not read PID file: {}", e);
-        process::exit(1)
+        exit(1)
     });
     let pid = pid_str.trim().parse::<i32>().unwrap_or_else(|e| {
         eprintln!("Invalid PID: {}", e);
-        process::exit(1)
+        exit(1)
     });
 
     // Send SIGTERM
     kill(Pid::from_raw(pid), SIGTERM).unwrap_or_else(|e| {
         eprintln!("Failed to send SIGTERM: {}", e);
-        process::exit(1)
+        exit(1)
     });
     println!("Sent SIGTERM to {}", pid);
 
@@ -192,4 +168,49 @@ pub fn status() {
         }
     }
     println!("Not running");
+}
+#[derive(Deserialize)]
+struct RunRequest {
+    cmd: Vec<String>,
+}
+
+fn execute_command(cmd: &[String]) -> Result<Output> {
+    Command::new(&cmd[0])
+        .args(&cmd[1..])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+}
+
+fn run_request(req: RunRequest) -> Result<()> {
+    let now = Local::now().format("%Y-%m-%d %H:%M:%S");
+    let cmd_line = req.cmd.join(" ");
+
+    // 1) record what was requested
+    let mut logf = OpenOptions::new().create(true).append(true).open(OUT_LOG)?;
+    writeln!(logf, "{} Requested: {}", now, cmd_line)?;
+
+    // 2) open the two log files for capture
+    let out = OpenOptions::new().create(true).append(true).open(OUT_LOG)?;
+    let err = OpenOptions::new().create(true).append(true).open(ERR_LOG)?;
+
+    // 3) spawn the process
+    match Command::new(&req.cmd[0])
+        .args(&req.cmd[1..])
+        .stdout(out)
+        .stderr(err)
+        .spawn()
+    {
+        Ok(child) => {
+            let mut logf = OpenOptions::new().create(true).append(true).open(OUT_LOG)?;
+            writeln!(logf, "{} Spawned `{}` (pid={})", now, cmd_line, child.id())?;
+        }
+        Err(e) => {
+            let mut logf = OpenOptions::new().create(true).append(true).open(OUT_LOG)?;
+            writeln!(logf, "{} Failed to spawn `{}`: {}", now, cmd_line, e)?;
+        }
+    }
+
+    Ok(())
 }

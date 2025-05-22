@@ -9,104 +9,66 @@ use std::fs::remove_file;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::{Read, Result, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::process::{exit, Command, Output, Stdio};
 use std::{fs, thread};
 
-pub fn start_daemon() {
-    /// using the daemonizer crate to make a daemon more easily
-    /// handles ->
-    /// - double forking:
-    ///     detaches process from controlling terminal
-    ///     ensures it doesn't acquire a new one
-    /// - session leadership:
-    ///     creates a new session, making the process
-    ///     the session leader
-    /// - working directory:
-    ///     changes the working directory to the root(/)
-    ///     to avoid locking directories
-    /// - file mode creation mask:
-    ///     sets the file mode creation mask to zero,
-    ///     ensuring files are created with the desired
-    ///     permissions
-    /// - standard file descriptors:
-    ///     redirects standard input, output, and
-    ///     error to /dev/bull or specified files
-    /// - PID File Creation:
-    ///     write's the daemons process ID to a file
-    ///     for management of process
-    // prepare log files for stdout and stderr
-    // 1) daemonize the process
+// start the capsule daemon:
+// fork & detach
+// spawn RPC logger thread
+// bund UDS & set perms
+// accept + handle each client
+pub fn start_daemon() -> Result<()> {
+    // daemonize: detach, write PID, redirect stdout/stderr
     Daemonize::new()
         .pid_file(PID_FILE)
         .chown_pid_file(true)
+        .working_directory("/")
+        .umask(0)
+        .stdout(
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(OUT_LOG)
+                .unwrap(),
+        )
+        .stderr(
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(ERR_LOG)
+                .unwrap(),
+        )
         .start()
         .unwrap_or_else(|e| {
             eprintln!("Failed to daemonize: {}", e);
-            exit(1);
+            process::exit(1);
         });
 
-    // 2) launch the logger thread
     thread::spawn(|| {
         if let Err(e) = start_rpc_logger() {
-            eprintln!("Logger thread failed: {}", e);
+            eprintln!("logger thread failed: {}", e);
         }
     });
 
-    // 3) ensure old socket is gone, then bind
-    if Path::new(SOCKET_PATH).exists() {
-        fs::remove_file(SOCKET_PATH).ok();
-    }
-    let listener = UnixListener::bind(SOCKET_PATH).unwrap_or_else(|e| {
-        eprintln!("Failed to bind {}: {}", SOCKET_PATH, e);
-        exit(1);
-    });
+    // prep socket
+    let _ = fs::remove_file(SOCKET_PATH);
+    let listener = UnixListener::bind(SOCKET_PATH)?;
+    fs::set_permissions(SOCKET_PATH, fs::Permissions::from_mode(0o700))?;
 
-    // 4) main RPC loop
-    for stream in listener.incoming() {
-        match stream {
-            Ok(mut sock) => {
-                let mut buf = [0u8; 2048];
-                if let Ok(n) = sock.read(&mut buf) {
-                    if n == 0 {
-                        continue;
-                    }
-                    let msg = String::from_utf8_lossy(&buf[..n]).trim().to_string();
-
-                    match msg.as_str() {
-                        "status" => {
-                            let _ = sock.write_all(b"running");
-                        }
-                        "shutdown" => {
-                            let now = Local::now().format("%Y-%m-%d %H:%M:%S");
-                            let mut lf = OpenOptions::new().append(true).open(OUT_LOG).unwrap();
-                            writeln!(lf, "{} Daemon stopping via socket", now).ok();
-                            break;
-                        }
-                        _ => {
-                            // JSON → offload to run_request (preserves old logging)
-                            if let Ok(req) = serde_json::from_str::<RunRequest>(&msg) {
-                                thread::spawn(move || {
-                                    if let Err(e) = run_request(req) {
-                                        eprintln!("run_request error: {}", e);
-                                    }
-                                });
-                            } else {
-                                // unrecognized payload → log it
-                                let now = Local::now().format("%Y-%m-%d %H:%M:%S");
-                                let mut lf = OpenOptions::new().append(true).open(OUT_LOG).unwrap();
-                                writeln!(lf, "{} Unrecognized request: {}", now, msg).ok();
-                            }
-                        }
-                    }
+    for conn in listener.incoming() {
+        match conn {
+            Ok(stream) => {
+                if let Err(e) = handle_client(stream) {
+                    eprintln!("client handler error: {}", e);
                 }
             }
-            Err(e) => {
-                eprintln!("Failed to accept connection: {}", e);
-            }
+            Err(e) => eprintln!("accept error: {}", e),
         }
     }
+    Ok(())
 }
 
 pub fn stop_daemon() {

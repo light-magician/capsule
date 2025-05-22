@@ -177,71 +177,64 @@ fn run_request(req: RunRequest) -> Result<()> {
     Ok(())
 }
 
-/// handle one client connectoin
-/// - read request
-/// - log it
-/// - spawn child with piped stdout/stderr
-/// - stream stdout/stderr in chunks
-/// - send exitcode then close
-fn handle_client(mut stream: UnixStream) -> Result<()> {
-    let req: request = read_frame(&mut stream)?;
-    info!("incoming command: {:?}", req);
+/// Handle one “run” RPC:
+/// 1. read all JSON from the socket
+/// 2. parse it into RunRequest
+/// 3. log the JSON text
+/// 4. spawn the child with piped stdout/stderr
+/// 5. copy from those pipes back into the socket
+fn handle_client(mut sock: UnixStream) -> io::Result<()> {
+    // 1. Read JSON request until client closes the write half
+    let mut buf = String::new();
+    sock.read_to_string(&mut buf)?;
+
+    // 2. Deserialize command
+    let req: RunRequest =
+        serde_json::from_str(&buf).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    // 3. Log raw request for auditing
+    let mut logf = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(OUT_LOG)?;
+    writeln!(logf, "REQUEST: {}", buf.trim_end()).ok();
+
+    // 4. Spawn the requested program
     let mut child = Command::new(&req.cmd[0])
         .args(&req.cmd[1..])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
 
-    // stdout thread
+    // 5. Stream stdout → socket
     if let Some(mut out) = child.stdout.take() {
-        let mut w = stream.try_clone()?;
+        let mut w = sock.try_clone()?;
         thread::spawn(move || {
-            let mut buf = [0u8; 4096];
-            while let Ok(n) = out.read(&mut buf) {
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = out.read(&mut chunk) {
                 if n == 0 {
                     break;
                 }
-                let _ = write_frame(
-                    &mut w,
-                    &ResponseFrame {
-                        channel: Stream::Stdout,
-                        data: Some(buf[..n].to_vec()),
-                    },
-                );
+                let _ = w.write_all(&chunk[..n]);
             }
         });
     }
 
-    // stderr thread
+    //    …and stderr → socket
     if let Some(mut err) = child.stderr.take() {
-        let mut w = stream.try_clone()?;
+        let mut w = sock;
         thread::spawn(move || {
-            let mut buf = [0u8; 4096];
-            while let Ok(n) = err.read(&mut buf) {
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = err.read(&mut chunk) {
                 if n == 0 {
                     break;
                 }
-                let _ = write_frame(
-                    &mut w,
-                    &ResponseFrame {
-                        channel: Stream::Stderr,
-                        data: Some(buf[..n].to_vec()),
-                    },
-                );
+                let _ = w.write_all(&chunk[..n]);
             }
         });
     }
 
-    // wait and send exit code
-    let status = child.wait()?;
-    let code = status.code().unwrap_or(-1);
-    write_frame(
-        &mut stream,
-        &ResponseFrame {
-            channel: Stream::ExitCode(code),
-            data: None,
-        },
-    )?;
-
+    // wait for the child to exit (threads will finish when pipes close)
+    let _ = child.wait();
     Ok(())
 }

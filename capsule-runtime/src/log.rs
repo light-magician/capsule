@@ -1,31 +1,27 @@
+use crate::constants::{AUDIT_LOG, OUT_LOG};
 use chrono::Local;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Write};
-use std::os::unix::net::UnixListener;
+use std::{
+    fs::OpenOptions,
+    io::{self, Write},
+};
 
-/// Daemon-side RPC logger: bind socket, accept requests, append JSON to log
-pub fn start_rpc_logger() -> io::Result<()> {
-    // TODO: think about best practices for location for this
-    let sock_path = "/tmp/capsule-logger.sock";
-    // remove stale socket if present
-    let _ = fs::remove_file(sock_path);
-    let listener = UnixListener::bind(sock_path)?;
-    for stream in listener.incoming() {
-        if let Ok(mut s) = stream {
-            // TODO: likely should not be expandable buf
-            let mut buf = Vec::new();
-            s.read_to_end(&mut buf)?;
-            // TODO: log file might belong in /var/log/capsule.log
-            // but capsule will not have those permissions by default
-            // will need to think of where to put it, if left in tmp
-            // it will be wiped every restart of container
-            let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
-            let mut logf = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/capsule.log")?;
-            writeln!(logf, "{} (RPC) {}", ts, String::from_utf8_lossy(&buf)).ok();
-        }
-    }
+/// Append an operational event (startup, error, shutdown) to the daemon’s event log.
+/// Format: "YYYY-MM-DD HH:MM:SS EVENT: <msg>"
+pub fn log_event(msg: &str) -> io::Result<()> {
+    let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
+    let mut file = OpenOptions::new().create(true).append(true).open(OUT_LOG)?;
+    writeln!(file, "{} EVENT: {}", ts, msg)?;
+    Ok(())
+}
+
+/// Append an audit entry (raw JSON command) to the audit log.
+/// Format: "YYYY-MM-DD HH:MM:SS AUDIT: <raw>"
+pub fn log_audit(raw: &str) -> io::Result<()> {
+    let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(AUDIT_LOG)?;
+    writeln!(file, "{} AUDIT: {}", ts, raw.trim_end())?;
     Ok(())
 }

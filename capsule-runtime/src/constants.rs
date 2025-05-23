@@ -11,3 +11,5 @@ pub const ERR_LOG: &str = "/tmp/capsule.err";
 pub const SOCKET_PATH: &str = "/tmp/capsule.sock";
 // the socket associated with the logging, different from that of daemon
 pub const LOGGER_SOCKET_PATH: &str = "/tmp/capsule-logger.sock";
+// command audits
+pub const AUDIT_LOG: &str = "/tmp/audit.log";

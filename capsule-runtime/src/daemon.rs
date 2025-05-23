@@ -76,16 +76,27 @@ pub fn start_daemon() -> Result<()> {
     }
     Ok(())
 }
-
 pub fn stop_daemon() -> Result<()> {
-    // First try graceful shutdown via socket
+    // 1) Try graceful shutdown via RPC socket
     if let Ok(mut stream) = UnixStream::connect(SOCKET_PATH) {
-        let _ = stream.write_all(b"shutdown");
-        println!("Sent shutdown command to daemon via socket");
+        // send shutdown request
+        stream.write_all(b"shutdown")?;
+        // signal EOF so daemon's read_to_string returns
+        stream.shutdown(Shutdown::Write)?;
+        // optionally read daemon's goodbye message
+        let mut resp = String::new();
+        if stream.read_to_string(&mut resp).is_ok() {
+            println!("{}", resp.trim());
+        } else {
+            println!("Sent shutdown command to daemon via socket");
+        }
+        // cleanup local socket file and PID file
+        fs::remove_file(PID_FILE).ok();
+        fs::remove_file(SOCKET_PATH).ok();
         return Ok(());
     }
 
-    // Fallback to PID/SIGTERM
+    // 2) Fallback: PID/SIGTERM if RPC socket didn't connect
     let pid_str = fs::read_to_string(PID_FILE).unwrap_or_else(|e| {
         eprintln!("Could not read PID file: {}", e);
         exit(1)
@@ -94,13 +105,14 @@ pub fn stop_daemon() -> Result<()> {
         eprintln!("Invalid PID: {}", e);
         exit(1)
     });
-
+    // send SIGTERM
     kill(Pid::from_raw(pid), SIGTERM).unwrap_or_else(|e| {
         eprintln!("Failed to send SIGTERM: {}", e);
         exit(1)
     });
     println!("Sent SIGTERM to {}", pid);
 
+    // cleanup after kill
     fs::remove_file(PID_FILE).ok();
     fs::remove_file(SOCKET_PATH).ok();
     Ok(())

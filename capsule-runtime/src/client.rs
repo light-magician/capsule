@@ -41,21 +41,20 @@ pub fn send_run_request(cmd: Vec<String>) -> io::Result<()> {
     let req = RunRequest { cmd: cmd.clone() };
     let payload = serde_json::to_vec(&req)?;
 
-    // send to control socket
-    // TODO: should be a match here to alert as to nature of connection failure
-    // TODO: should also be a cert based handshake process here
+    // Connect and send JSON payload, terminated by a newline
     let mut socket = UnixStream::connect(constants::SOCKET_PATH)?;
     socket.write_all(&payload)?;
-    // signal shutdown
-    socket.shutdown(Shutdown::Write)?;
-    // read back the streamed stdout stderr until EOF
+    socket.write_all(b"\n")?; // delimiter for daemon.read_line()
+
+    // Read back the streamed stdout/stderr until the server closes the socket
     let mut buf = [0u8; 4096];
     loop {
         let n = socket.read(&mut buf)?;
         if n == 0 {
-            break;
+            break; // EOF: daemon has finished and closed
         }
         io::stdout().write_all(&buf[..n])?;
     }
+
     Ok(())
 }

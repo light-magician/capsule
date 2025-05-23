@@ -1,5 +1,6 @@
-use crate::constants::{AUDIT_LOG, ERR_LOG, OUT_LOG, PID_FILE, SOCKET_PATH};
-use crate::log::{log_audit, log_event};
+use crate::constants::{AUDIT_LOG, ERR_LOG, OUT_LOG, PID_FILE, SOCKET_PATH, SYSLOG_PATH};
+use crate::log::{log_audit, log_command, log_event};
+use crate::sandbox;
 use chrono::Local;
 use daemonize::Daemonize;
 use nix::sys::signal::{kill, SIGTERM};
@@ -7,13 +8,14 @@ use nix::unistd::Pid;
 use serde::Deserialize;
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::{Error, ErrorKind, Read, Result, Write};
+use std::io::{BufRead, BufReader, Error, ErrorKind, Read, Result, Write};
 use std::net::Shutdown;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::process::{exit, Command, Stdio};
 use std::thread;
+use uuid::Uuid;
 
 #[derive(Deserialize)]
 struct RunRequest {
@@ -61,6 +63,19 @@ pub fn start_daemon() -> Result<()> {
     let _ = fs::remove_file(SOCKET_PATH);
     let listener = UnixListener::bind(SOCKET_PATH)?;
     fs::set_permissions(SOCKET_PATH, fs::Permissions::from_mode(0o700))?;
+
+    // —— ensure the syscall log exists ——
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(SYSLOG_PATH)
+        .map_err(|e| {
+            Error::new(
+                ErrorKind::Other,
+                format!("Failed to create {}: {}", SYSLOG_PATH, e),
+            )
+        })?;
+    fs::set_permissions(SYSLOG_PATH, fs::Permissions::from_mode(0o600))?;
 
     for conn in listener.incoming() {
         match conn {
@@ -137,17 +152,14 @@ pub fn status() -> Result<()> {
     Ok(())
 }
 
-/// Handle one “run” RPC:
-/// 1. read all JSON from the socket
-/// 2. parse it into RunRequest
-/// 3. audit-log the raw JSON
-/// 4. spawn the child with piped stdout/stderr
-/// 5. copy from those pipes back into the socket
-fn handle_client(mut sock: UnixStream) -> Result<()> {
+pub fn handle_client(mut sock: UnixStream) -> Result<()> {
+    // Read exactly one line (JSON payload delimited by '\n')
+    let mut reader = BufReader::new(sock.try_clone()?);
     let mut buf = String::new();
-    sock.read_to_string(&mut buf)?;
+    reader.read_line(&mut buf)?;
     let message = buf.trim_end();
 
+    // Handle control messages
     match message {
         "status" => {
             sock.write_all(b"running")?;
@@ -156,50 +168,33 @@ fn handle_client(mut sock: UnixStream) -> Result<()> {
         "shutdown" => {
             log_event("Daemon stopping via socket")?;
             sock.write_all(b"shutting down")?;
-            exit(0);
+            std::process::exit(0);
         }
         _ => {}
     }
 
-    // audit the JSON command
+    // Audit-log the raw JSON request
     log_audit(&buf)?;
 
-    // deserialize and execute
+    // Deserialize the RunRequest
     let req: RunRequest =
         serde_json::from_str(&buf).map_err(|e| Error::new(ErrorKind::Other, e))?;
 
-    let mut child = Command::new(&req.cmd[0])
-        .args(&req.cmd[1..])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    // Generate a session ID and log the high-level command
+    let session_id = Uuid::new_v4();
+    log_command(&session_id, &session_id, &req.cmd).map_err(|e| Error::new(ErrorKind::Other, e))?;
 
-    if let Some(mut out) = child.stdout.take() {
-        let mut w = sock.try_clone()?;
-        thread::spawn(move || {
-            let mut chunk = [0u8; 4096];
-            while let Ok(n) = out.read(&mut chunk) {
-                if n == 0 {
-                    break;
-                }
-                let _ = w.write_all(&chunk[..n]);
-            }
-        });
+    // Run under ptrace and capture syscalls
+    let output = sandbox::run_and_trace(&session_id, &req.cmd)
+        .map_err(|e| Error::new(ErrorKind::Other, e))?;
+
+    // Stream stdout and stderr back to the client
+    if !output.stdout.is_empty() {
+        sock.write_all(&output.stdout)?;
+    }
+    if !output.stderr.is_empty() {
+        sock.write_all(&output.stderr)?;
     }
 
-    if let Some(mut err) = child.stderr.take() {
-        let mut w = sock;
-        thread::spawn(move || {
-            let mut chunk = [0u8; 4096];
-            while let Ok(n) = err.read(&mut chunk) {
-                if n == 0 {
-                    break;
-                }
-                let _ = w.write_all(&chunk[..n]);
-            }
-        });
-    }
-
-    let _ = child.wait();
     Ok(())
 }

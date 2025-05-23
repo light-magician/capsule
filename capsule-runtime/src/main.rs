@@ -3,6 +3,7 @@ mod client;
 mod constants;
 mod daemon;
 mod log;
+mod sandbox;
 use clap::Parser;
 use cli::Cli;
 use cli::DaemonAction;

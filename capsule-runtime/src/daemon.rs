@@ -1,35 +1,33 @@
-use crate::constants::{ERR_LOG, OUT_LOG, PID_FILE, SOCKET_PATH};
-use crate::log::start_rpc_logger;
+use crate::constants::{AUDIT_LOG, ERR_LOG, OUT_LOG, PID_FILE, SOCKET_PATH};
+use crate::log::{log_audit, log_event};
 use chrono::Local;
 use daemonize::Daemonize;
 use nix::sys::signal::{kill, SIGTERM};
 use nix::unistd::Pid;
 use serde::Deserialize;
-use std::fs::remove_file;
-use std::fs::File;
+use std::fs;
 use std::fs::OpenOptions;
 use std::io::{Error, ErrorKind, Read, Result, Write};
 use std::net::Shutdown;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-use std::process::{exit, Command, Output, Stdio};
-use std::{fs, thread};
-// placeholder struct for the string array that
-// comes in from the client. Likely a command or random
-// text.
+use std::process::{exit, Command, Stdio};
+use std::thread;
+
 #[derive(Deserialize)]
 struct RunRequest {
     cmd: Vec<String>,
 }
-// start the capsule daemon:
-// fork & detach
-// spawn RPC logger thread
-// bund UDS & set perms
-// accept + handle each client
+
+/// start the capsule daemon:
+/// - fork & detach
+/// - bind UDS & set perms
+/// - accept + handle each client
 pub fn start_daemon() -> Result<()> {
     // remove a stale Process ID file if present
-    let _ = std::fs::remove_file(PID_FILE);
+    let _ = fs::remove_file(PID_FILE);
+
     // daemonize: detach, write PID, redirect stdout/stderr
     Daemonize::new()
         .pid_file(PID_FILE)
@@ -56,11 +54,8 @@ pub fn start_daemon() -> Result<()> {
             exit(1);
         });
 
-    thread::spawn(|| {
-        if let Err(e) = start_rpc_logger() {
-            eprintln!("logger thread failed: {}", e);
-        }
-    });
+    // log startup event
+    log_event(&format!("Daemon started on {}", SOCKET_PATH))?;
 
     // prep socket
     let _ = fs::remove_file(SOCKET_PATH);
@@ -71,34 +66,26 @@ pub fn start_daemon() -> Result<()> {
         match conn {
             Ok(stream) => {
                 if let Err(e) = handle_client(stream) {
-                    eprintln!("client handler error: {}", e);
+                    log_event(&format!("client handler error: {}", e)).ok();
                 }
             }
-            Err(e) => eprintln!("accept error: {}", e),
+            Err(e) => {
+                log_event(&format!("accept error: {}", e)).ok();
+            }
         }
     }
     Ok(())
 }
 
 pub fn stop_daemon() -> Result<()> {
-    //TODO: Not prod quality
-    //Relying on SIGTERM via kill is a temporary workaround
-    //
-    // Best practice is to expose a controlled shutdown
-    // RPC over IPC channel aka "shutdown" message
-    // over Unix socket, or maybe integrate with
-    // service manager (systemd/launchd) so that it
-    // handles stop signals cleanly
-
     // First try graceful shutdown via socket
     if let Ok(mut stream) = UnixStream::connect(SOCKET_PATH) {
-        // Send shutdown message
         let _ = stream.write_all(b"shutdown");
         println!("Sent shutdown command to daemon via socket");
         return Ok(());
     }
 
-    // If socket unavailable, fallback to PID/SIGTERM
+    // Fallback to PID/SIGTERM
     let pid_str = fs::read_to_string(PID_FILE).unwrap_or_else(|e| {
         eprintln!("Could not read PID file: {}", e);
         exit(1)
@@ -108,32 +95,25 @@ pub fn stop_daemon() -> Result<()> {
         exit(1)
     });
 
-    // Send SIGTERM
     kill(Pid::from_raw(pid), SIGTERM).unwrap_or_else(|e| {
         eprintln!("Failed to send SIGTERM: {}", e);
         exit(1)
     });
     println!("Sent SIGTERM to {}", pid);
 
-    // Cleanup PID file
-    remove_file(PID_FILE).ok();
-    // Optionally remove socket if left behind
-    remove_file(SOCKET_PATH).ok();
+    fs::remove_file(PID_FILE).ok();
+    fs::remove_file(SOCKET_PATH).ok();
     Ok(())
 }
 
 pub fn status() -> Result<()> {
-    // if there is no PID, its not running
+    // if there is no PID, it's not running
     if Path::new(PID_FILE).exists() {
         if let Ok(mut stream) = UnixStream::connect(SOCKET_PATH) {
-            // send the literal "status" query
             stream.write_all(b"status")?;
-            // close the write-half so the daemon's read_to_string() will return
             stream.shutdown(Shutdown::Write)?;
-            // read daemon's reply to a string
             let mut resp = String::new();
             stream.read_to_string(&mut resp)?;
-            // if daemon answer's "running", echo the PID
             if resp.trim() == "running" {
                 let pid = fs::read_to_string(PID_FILE).unwrap_or_default();
                 println!("capsule daemon running (PID {})", pid.trim());
@@ -141,99 +121,47 @@ pub fn status() -> Result<()> {
             }
         }
     }
-    // fallback, either socket failed or reply wasn't running
     println!("capsule daemon not running ...");
-    Ok(())
-}
-
-fn execute_command(cmd: &[String]) -> Result<Output> {
-    // TODO: what is best practice for where these commands should be executed on the container?
-    // where this is executed will matter relative to the client process
-    Command::new(&cmd[0])
-        .args(&cmd[1..])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-}
-
-fn run_request(req: RunRequest) -> Result<()> {
-    let now = Local::now().format("%Y-%m-%d %H:%M:%S");
-    let cmd_line = req.cmd.join(" ");
-
-    // 1) record what was requested
-    let mut logf = OpenOptions::new().create(true).append(true).open(OUT_LOG)?;
-    writeln!(logf, "{} Requested: {}", now, cmd_line)?;
-
-    // 2) open the two log files for capture
-    let out = OpenOptions::new().create(true).append(true).open(OUT_LOG)?;
-    let err = OpenOptions::new().create(true).append(true).open(ERR_LOG)?;
-
-    // 3) spawn the process
-    match Command::new(&req.cmd[0])
-        .args(&req.cmd[1..])
-        .stdout(out)
-        .stderr(err)
-        .spawn()
-    {
-        Ok(child) => {
-            let mut logf = OpenOptions::new().create(true).append(true).open(OUT_LOG)?;
-            writeln!(logf, "{} Spawned `{}` (pid={})", now, cmd_line, child.id())?;
-        }
-        Err(e) => {
-            let mut logf = OpenOptions::new().create(true).append(true).open(OUT_LOG)?;
-            writeln!(logf, "{} Failed to spawn `{}`: {}", now, cmd_line, e)?;
-        }
-    }
-
     Ok(())
 }
 
 /// Handle one “run” RPC:
 /// 1. read all JSON from the socket
 /// 2. parse it into RunRequest
-/// 3. log the JSON text
+/// 3. audit-log the raw JSON
 /// 4. spawn the child with piped stdout/stderr
 /// 5. copy from those pipes back into the socket
 fn handle_client(mut sock: UnixStream) -> Result<()> {
-    // 1. Read JSON request until client closes the write half
     let mut buf = String::new();
     sock.read_to_string(&mut buf)?;
-    // short circuit for status and shutdown
     let message = buf.trim_end();
+
     match message {
         "status" => {
-            // client asked “are you alive?”
             sock.write_all(b"running")?;
             return Ok(());
         }
         "shutdown" => {
-            // client asked us to exit
+            log_event("Daemon stopping via socket")?;
             sock.write_all(b"shutting down")?;
-            std::process::exit(0);
+            exit(0);
         }
-        _ => {} // otherwise fall through to JSON path
+        _ => {}
     }
 
-    // 2. Deserialize command
+    // audit the JSON command
+    log_audit(&buf)?;
+
+    // deserialize and execute
     let req: RunRequest =
         serde_json::from_str(&buf).map_err(|e| Error::new(ErrorKind::Other, e))?;
 
-    // 3. Log raw request for auditing
-    let mut logf = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(OUT_LOG)?;
-    writeln!(logf, "REQUEST: {}", buf.trim_end()).ok();
-
-    // 4. Spawn the requested program
     let mut child = Command::new(&req.cmd[0])
         .args(&req.cmd[1..])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
 
-    // 5. Stream stdout → socket
     if let Some(mut out) = child.stdout.take() {
         let mut w = sock.try_clone()?;
         thread::spawn(move || {
@@ -247,7 +175,6 @@ fn handle_client(mut sock: UnixStream) -> Result<()> {
         });
     }
 
-    //    …and stderr → socket
     if let Some(mut err) = child.stderr.take() {
         let mut w = sock;
         thread::spawn(move || {
@@ -261,7 +188,6 @@ fn handle_client(mut sock: UnixStream) -> Result<()> {
         });
     }
 
-    // wait for the child to exit (threads will finish when pipes close)
     let _ = child.wait();
     Ok(())
 }

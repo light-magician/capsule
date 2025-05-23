@@ -1,28 +1,27 @@
+use crate::constants::{AUDIT_LOG, OUT_LOG};
 use chrono::Local;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Write};
-use std::os::unix::net::UnixListener;
+use std::{
+    fs::OpenOptions,
+    io::{self, Write},
+};
 
-use crate::constants::{self, OUT_LOG};
-/// Daemon-side RPC logger: bind socket, accept requests, append JSON to log
-pub fn start_rpc_logger() -> io::Result<()> {
-    // TODO: think about best practices for location for this
-    // remove stale socket if present
-    let _ = fs::remove_file(constants::LOGGER_SOCKET_PATH);
+/// Append an operational event (startup, error, shutdown) to the daemon’s event log.
+/// Format: "YYYY-MM-DD HH:MM:SS EVENT: <msg>"
+pub fn log_event(msg: &str) -> io::Result<()> {
+    let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
+    let mut file = OpenOptions::new().create(true).append(true).open(OUT_LOG)?;
+    writeln!(file, "{} EVENT: {}", ts, msg)?;
+    Ok(())
+}
 
-    let listener = UnixListener::bind(constants::LOGGER_SOCKET_PATH)?;
-    for conn in listener.incoming() {
-        match conn {
-            Ok(mut sock) => {
-                let mut buf = String::new();
-                // read until client closes write-half
-                if sock.read_to_string(&mut buf).is_ok() {
-                    let mut file = OpenOptions::new().create(true).append(true).open(OUT_LOG)?;
-                    writeln!(file, "{}", buf.trim_end()).ok();
-                }
-            }
-            Err(e) => eprintln!("logger accept error: {}", e),
-        }
-    }
+/// Append an audit entry (raw JSON command) to the audit log.
+/// Format: "YYYY-MM-DD HH:MM:SS AUDIT: <raw>"
+pub fn log_audit(raw: &str) -> io::Result<()> {
+    let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(AUDIT_LOG)?;
+    writeln!(file, "{} AUDIT: {}", ts, raw.trim_end())?;
     Ok(())
 }

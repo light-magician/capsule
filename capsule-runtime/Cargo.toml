@@ -5,10 +5,6 @@ name = "capsule"
 version = "0.1.0"
 edition = "2021"
 
-[lib]
-name = "capsule_runtime"
-path = "src/lib.rs"
-
 [[bin]]
 name = "capsule"
 path = "src/main.rs"
@@ -22,10 +18,12 @@ clap = { version = "4.5.37", default-features = true, features = ["derive", "env
 daemonize = "0.5.0"
 hex = "0.4.3"
 libc        = "0.2.172"
-nix = {version="0.30.1", features = ["signal", "process"]}
+nix = {version="0.30.1", features = ["signal", "process", "ptrace"]}
 seccompiler = "0.5.0"
 serde = {version="1.0.219", features=["derive"]}
 serde_json = "1.0.140"
+syscalls = "0.6.18"
+uuid = {version = "1.17.0", features = ["v4", "serde"]}
 
 [dev-dependencies]
 assert_cmd = "2.0.17"

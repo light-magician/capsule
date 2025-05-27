@@ -13,3 +13,7 @@ pub const SOCKET_PATH: &str = "/tmp/capsule.sock";
 pub const LOGGER_SOCKET_PATH: &str = "/tmp/capsule-logger.sock";
 // command audits
 pub const AUDIT_LOG: &str = "/tmp/audit.log";
+// path for logging high level commands like 'ls'
+pub const COMMAND_LOG_PATH: &str = "/var/log/capsule_commands.log";
+// path for the logging of syscalls
+pub const SYSLOG_PATH: &str = "/var/log/capsule_syscalls.log";

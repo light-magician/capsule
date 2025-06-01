@@ -1,30 +1,22 @@
-mod cli;
-mod client;
-mod constants;
-mod daemon;
-mod log;
-mod sandbox;
-use clap::Parser;
-use cli::Cli;
-use cli::DaemonAction;
-use client::send_run_request;
-use daemon::{start_daemon, status, stop_daemon};
-use std::io::Result;
+use std::path::PathBuf;
 
-fn main() -> Result<()> {
-    let cli = Cli::parse();
-    match cli.cmd {
-        cli::Command::Daemon { action } => match action {
-            DaemonAction::Start => start_daemon()?,
-            DaemonAction::Stop => stop_daemon()?,
-            DaemonAction::Status => status()?,
-        },
-        cli::Command::Run { cmd } => {
-            if let Err(err) = send_run_request(cmd) {
-                //TODO: should not break here
-                eprintln!("failed to send run request: {}", err);
-                std::process::exit(1);
-            }
+mod cli;
+mod sandbox;
+
+fn main() {
+    if let Err(e) = real_main() {
+        eprintln!("❌ {e:?}");
+        std::process::exit(1);
+    }
+}
+
+fn real_main() -> anyhow::Result<()> {
+    match cli::parse() {
+        cli::Command::Trace { target, args, log } => {
+            let mut argv = Vec::with_capacity(1 + args.len());
+            argv.push(target);
+            argv.extend(args);
+            sandbox::trace(argv, log.map(PathBuf::from))?;
         }
     }
     Ok(())

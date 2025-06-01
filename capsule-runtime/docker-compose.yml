@@ -8,9 +8,19 @@ services:
     image: capsule-runtime-dev:latest
     container_name: capsule-dev
     working_dir: /usr/src/app
+
+    # ----- live code / interactive shell -----
     volumes:
       - .:/usr/src/app # sync host ↔ container
     tty: true # allocate a pseudo-TTY
     stdin_open: true # keep stdin open for `bash`
-    # you can override command on-the-fly, e.g.:
-    # command: ["cargo", "test"]
+
+    # ----- allow ptrace inside the container -----
+    cap_add:
+      - SYS_PTRACE # grant CAP_SYS_PTRACE to root inside the container
+    security_opt:
+      - seccomp:unconfined # remove the default Docker seccomp profile that blocks ptrace
+
+
+    # (optional) default command
+    # command: ["bash"]

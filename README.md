@@ -2,7 +2,9 @@
 
 <img src="capsule-flavor-art.png" alt="Capsule logo" width="500" />
 
-Capsule is an open‑core security runtime designed for teams embedding AI‑driven agents into development, data and production workflows. It compiles a human‑readable `capsule.yaml` policy into an OS‑native sandbox (Seccomp on Linux, Seatbelt on macOS), executes each agent tool invocation under that fine‑grained syscall filter, and writes a tamper‑evident Merkle–chained audit log of every action.
+Capsule is an open‑core security runtime designed for teams embedding AI‑driven agents into production workflows. It compiles a human‑readable `capsule.yaml` policy into an OS‑native sandbox (Seccomp on Linux, Seatbelt on macOS), executes each agent tool invocation under that fine‑grained syscall filter, and writes a tamper‑evident Merkle–chained audit log of every action.
+
+Most “typical” mitigations sit outside the agent—Kubernetes NetworkPolicy, Cloudflare Gateway, seccomp templates, ANSI scrubbers in web consoles, etc. Capsule fuses those layers into one declarative policy that (a) is stored, versioned, and hashed alongside code, (b) yields a Merkle-chained syscall log you can replay, and (c) reloads live without a container rebuild. For teams that already maintain strong infra controls, Capsule is complementary (adds syscall-level proof and simpler audit). For green-field agent startups it’s often strict-superset coverage with far less YAML sprawl. In short: yes—it’s competitive with most point solutions and uniquely unifies them.
 
 ## Who Is Capsule For?
 

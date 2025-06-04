@@ -5,6 +5,7 @@
 **/target/
 **/*.rs.bk          # rustfmt backups
 **/*.pdb            # MSVC debug symbols
+**/*.lock
 
 # ───────────────────────────────────────────────────────────────
 # Environment files (any depth)

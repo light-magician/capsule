@@ -1,0 +1,12 @@
+# meta
+.git
+**/.env
+**/.venv
+# rust
+capsule-runtime/target
+# python
+**/__pycache__
+**/.mypy_cache
+# editors
+.vscode
+.idea

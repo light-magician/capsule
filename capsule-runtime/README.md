@@ -31,17 +31,23 @@ You can build the the project and install the CLI from there.
 The demo scripts are located in `usr/src/app/scripts/` and
 the logs will be generated inside `/tmp/`.
 
-1. **Local build**:
-   ```bash
-   cargo build --release
-   # Binary at target/release/capsule
-   ```
-2. **Global install** (runs from anywhere):
-   ```bash
-   cargo install --path . --force
-   # Installs `capsule` into your cargo bin directory (usually ~/.cargo/bin)
-   ```
-3. **Usage**:
+**Local build**:
+
+```bash
+# Binary at target/release/capsule
+cargo build --release
+```
+
+**Global install** (runs from anywhere):
+
+```bash
+# Installs `capsule` into your cargo bin directory (usually ~/.cargo/bin)
+cargo install --path . --force
+# verify installation
+capsule # should print help info
+```
+
+**Usage**:
 
 test it out on a script
 
@@ -55,4 +61,6 @@ capsule run python3 hello.py # should see `hello world` printed
 # Verify an audit log
 cd /tmp
 cat capsule_syscalls.log
+# or tail the log live
+capsule tail # then run trace same as above
 ```

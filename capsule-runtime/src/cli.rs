@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-
+use std::path::PathBuf;
 /// Command-line interface for Capsule
 #[derive(Parser)]
 #[command(name = "capsule", author, version, about)]
@@ -21,6 +21,11 @@ pub enum Command {
         // write to a specific file instead of default
         #[arg(short, long)]
         log: Option<String>,
+    },
+    /// tail log file
+    Tail {
+        #[arg(long, value_name = "FILE")]
+        file: Option<PathBuf>,
     },
 }
 

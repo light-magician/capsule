@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 mod cli;
 mod constants;
-mod log;
+mod log; // TODO: tail and log should be in a log/ crate
 mod sandbox;
+mod tail;
 
 fn main() {
     if let Err(e) = real_main() {
@@ -19,6 +20,9 @@ fn real_main() -> anyhow::Result<()> {
             argv.push(target);
             argv.extend(args);
             sandbox::trace(argv, log.map(PathBuf::from))?;
+        }
+        cli::Command::Tail { file } => {
+            tail::tail(file.clone())?;
         }
     }
     Ok(())

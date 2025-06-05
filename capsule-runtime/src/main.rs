@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
 mod cli;
+mod constants;
+mod log;
 mod sandbox;
 
 fn main() {

@@ -9,7 +9,7 @@
 //!   capsule trace <target> [ARG…] [--log <file>]
 //!
 //! Log default: `/tmp/capsule-trace-<YYYYMMDDThhmmssZ>.log`
-
+use crate::log;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use nix::{
@@ -22,13 +22,14 @@ use nix::{
 };
 use std::{
     ffi::CString,
-    fs::File,
+    fs::{File, OpenOptions},
     io::{BufWriter, Write},
     path::PathBuf,
     time::SystemTime,
 };
 use syscalls::Sysno;
 
+//NOTE: we would only expect one target to be active at a time
 #[cfg(target_arch = "x86_64")]
 type Regs = libc::user_regs_struct;
 #[cfg(target_arch = "aarch64")]
@@ -50,24 +51,51 @@ fn decode_syscall_regs(r: &Regs) -> (u64, [u64; 6]) {
     }
 }
 
+// ---------- portable helpers ----------
+
+#[cfg(target_arch = "x86_64")]
+fn extract(regs: libc::user_regs_struct) -> (i64, [u64; 6]) {
+    (
+        regs.orig_rax as i64,
+        [regs.rdi, regs.rsi, regs.rdx, regs.r10, regs.r8, regs.r9],
+    )
+}
+
+#[cfg(target_arch = "aarch64")]
+fn extract(regs: libc::user_regs_struct) -> (i64, [u64; 6]) {
+    (
+        regs.regs[8] as i64, // x8 = syscall #
+        [
+            regs.regs[0],
+            regs.regs[1],
+            regs.regs[2],
+            regs.regs[3],
+            regs.regs[4],
+            regs.regs[5],
+        ],
+    )
+}
+
+/// very cheap “name” stub – fill in with a real table later
+fn syscall_name(num: i64) -> String {
+    format!("syscall_{num}")
+}
+
+fn uptime_secs() -> f64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64()
+}
+
 /// Trace `argv[0]` with its arguments; write log to `log_override` or default.
 pub fn trace(argv: Vec<String>, log_override: Option<PathBuf>) -> Result<()> {
     if argv.is_empty() {
         anyhow::bail!("trace: empty argv");
     }
-
     // ---------------------------------------------------------------------
-    // 1. Prepare logfile (always create, even if later steps fail)
-    // ---------------------------------------------------------------------
-    let default_name = PathBuf::from(format!(
-        "/tmp/capsule-trace-{}.log",
-        Utc::now().format("%Y%m%dT%H%M%SZ")
-    ));
-    let log_path = log_override.unwrap_or(default_name);
-    let mut log = BufWriter::new(File::create(&log_path).context("create log file")?);
-
-    // ---------------------------------------------------------------------
-    // 2. Fork
+    // Fork
     // ---------------------------------------------------------------------
     match unsafe { fork() }? {
         ForkResult::Child => {
@@ -76,11 +104,9 @@ pub fn trace(argv: Vec<String>, log_override: Option<PathBuf>) -> Result<()> {
                 eprintln!("❌ child error: {e:?}");
                 std::process::exit(1);
             }
-            unreachable!();
         }
         ForkResult::Parent { child } => {
-            run_tracer(child, &mut log).context("tracer loop")?;
-            log.flush().ok();
+            run_tracer(child, &argv)?;
         }
     }
     Ok(())
@@ -103,50 +129,74 @@ fn child_exec(argv: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn run_tracer(child: Pid, log: &mut BufWriter<File>) -> Result<()> {
-    // Wait for initial SIGSTOP
-    waitpid(child, None).context("wait initial stop")?;
+/// drive ptrace, format each event, and stream to `log::append`.
+///
+/// * child - PID being traced
+/// * argv  - original command line, used only for the START marker.
+pub fn run_tracer(child: Pid, argv: &[String]) -> Result<()> {
+    // Session marker
+    log::append(format!(
+        "### START {} pid={} cmd={}",
+        Utc::now().to_rfc3339(),
+        child,
+        argv.join(" ")
+    ));
 
-    // Tag syscall stops + kill child if tracer dies
+    // Wait for the SIGSTOP from ptrace::traceme() in the child
+    waitpid(child, None)?;
+
+    // Tell the kernel what we want
     ptrace::setoptions(
         child,
         ptrace::Options::PTRACE_O_TRACESYSGOOD | ptrace::Options::PTRACE_O_EXITKILL,
-    )
-    .context("setoptions")?;
+    )?;
 
     loop {
-        // Resume until next syscall entry/exit
-        ptrace::syscall(child, None).context("resume child")?;
-        let status = waitpid(child, Some(WaitPidFlag::WSTOPPED)).context("waitpid")?;
+        // ------------- RESUME FIRST -------------
+        ptrace::syscall(child, None)?; // child runs until next stop
 
-        match status {
+        // ------------- THEN WAIT ----------------
+        match waitpid(child, Some(WaitPidFlag::WSTOPPED))? {
             WaitStatus::PtraceSyscall(pid) => {
-                let regs = ptrace::getregs(pid).context("getregs")?;
-                let (nr, args) = decode_syscall_regs(&regs);
-                let name = Sysno::from(nr as i32).name();
-                writeln!(
-                    log,
-                    "{:.6} {:5} {}({:#x}, {:#x}, {:#x}, {:#x}, {:#x}, {:#x})",
-                    seconds_since_epoch(),
-                    pid,
-                    name,
+                let (nr, args) = extract(ptrace::getregs(pid)?);
+
+                log::append(format!(
+                    "{:.6} {:5} syscall_{nr}({:#x},{:#x},{:#x},{:#x},{:#x},{:#x})",
+                    uptime_secs(),
+                    pid.as_raw(),
                     args[0],
                     args[1],
                     args[2],
                     args[3],
                     args[4],
-                    args[5]
-                )?;
+                    args[5],
+                ));
             }
-            WaitStatus::Exited(_, code) => {
-                writeln!(log, "# child exited with code {code}")?;
+
+            WaitStatus::Exited(pid, code) => {
+                log::append(format!(
+                    "{:.6} {:5} exited({})",
+                    uptime_secs(),
+                    pid.as_raw(),
+                    code
+                ));
                 break;
             }
-            WaitStatus::Signaled(_, sig, _) => {
-                writeln!(log, "# child killed by signal {sig}")?;
+
+            WaitStatus::Signaled(pid, sig, _core) => {
+                log::append(format!(
+                    "{:.6} {:5} signaled({})",
+                    uptime_secs(),
+                    pid.as_raw(),
+                    sig as i32
+                ));
                 break;
             }
-            _ => {}
+
+            _ => {
+                // Any other stop (e.g. plain SIGTRAP) loops around; we’ll
+                // hit ptrace::syscall again at the top and keep the child moving.
+            }
         }
     }
     Ok(())

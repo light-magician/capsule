@@ -1,27 +1,19 @@
 # syntax=docker/dockerfile:1
 
-# 1. Base image with Rust (amd64/slim variant)
 FROM rust:1.80-slim-bullseye
 
-# 2. Install system deps for seccomp + BCC + Python
-RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-      libseccomp-dev \            
-      strace \
-      netcat \
-      socat \
-      python3 \                   
-      python3-pip \           
-      vim \ 
- && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        libseccomp-dev \
+        strace netcat socat \
+        python3 python3-pip python3-venv \
+        vim git curl && \
+    pip install --no-cache-dir pipx && \
+    pipx install poetry==1.8.2 && \
+    # make sure pipx’s bin dir is visible for every shell
+    ln -s /root/.local/bin/poetry /usr/local/bin/poetry && \
+    rm -rf /var/lib/apt/lists/*
 
-# 3. Create and set working directory
 WORKDIR /usr/src/app
 
-# 4. Copy and build your Rust code
-COPY Cargo.toml Cargo.lock ./
-COPY src ./src
-RUN cargo build --release
-
-# 5. Default to an interactive shell; run your Python/BCC demos here
 CMD ["bash"]

@@ -20,14 +20,7 @@ use nix::{
     },
     unistd::{execvp, fork, ForkResult, Pid},
 };
-use std::{
-    ffi::CString,
-    fs::{File, OpenOptions},
-    io::{BufWriter, Write},
-    path::PathBuf,
-    time::SystemTime,
-};
-use syscalls::Sysno;
+use std::{ffi::CString, path::PathBuf, time::SystemTime};
 
 //NOTE: we would only expect one target to be active at a time
 #[cfg(target_arch = "x86_64")]
@@ -144,22 +137,77 @@ pub fn run_tracer(child: Pid, argv: &[String]) -> Result<()> {
 
     // Wait for the SIGSTOP from ptrace::traceme() in the child
     waitpid(child, None)?;
+    // Options Reference: https://docs.rs/nix/latest/nix/sys/ptrace/struct.Options.html
+    //
+    // TRACEGOOD: adds 0x80 to SIGTRAP signal when syscall trap occurs
+    //            Lets the tracer distinguish between traps caused by syscalls
+    //            vs other events (breakpoints or int 3, ect).
+    //            Ensures that syscalls are easy to recognize in waitpid.
+    // EXITKILL:  automatically kills traced child if tracer exits unexpectedly.
+    //            Prevents orphaned traced processes from continuing execution
+    //            without supervision. A containment failsafe.
+    // TRACECLONE: notififes tracer (waitpid) when traced process calls clone(2).
+    //             Let's you track new threads or lightweight processes, useful
+    //             for multi-threaded programs.
+    // TRACEFORK: notifies tracer when process calls fork(2).
+    //            Allows tracer to track new child processes spawned via fork.
+    // TRACEVFORK: notifies tracer on vfork(2) call.
+    //            Like fork, but with shared address space.
+    //             Important for detecting short lived child processes that run exec()
+    //             soon after.
+    // TRACEEXEC: notifies tracer when traced process calls execve(2) or equivalent.
+    //            Allows for re-inspect memory, registers, or log that the process
+    //            swapped out its binary image. Useful for trace / audit.
+    let trace_opts: ptrace::Options = ptrace::Options::PTRACE_O_TRACESYSGOOD
+        | ptrace::Options::PTRACE_O_EXITKILL
+        | ptrace::Options::PTRACE_O_TRACECLONE
+        | ptrace::Options::PTRACE_O_TRACEFORK
+        | ptrace::Options::PTRACE_O_TRACEVFORK
+        | ptrace::Options::PTRACE_O_TRACEEXEC;
+    // enable options on the very first PID
+    ptrace::setoptions(child, trace_opts)?;
+    // NOTE: How virtual-env & poetry actually exec
+    //
+    //       Virtual Env (PEP 405):
+    //       creates a private copy of the launcher binary (python, pip)
+    //       and rewrites sys.path at startup. No extra sandboxing, just another execve().
+    //
+    //       Poetry:
+    //       host interpreter runs /usr/local/bin/poetry (a python script).
+    //       Poetry locates or creates a .venv/ and then execve()'s that environment's
+    //       python with your script path.
 
-    // Tell the kernel what we want
-    ptrace::setoptions(
-        child,
-        ptrace::Options::PTRACE_O_TRACESYSGOOD | ptrace::Options::PTRACE_O_EXITKILL,
-    )?;
+    // first and only unconditional resume
+    ptrace::syscall(child, None)?;
 
     loop {
-        // ------------- RESUME FIRST -------------
-        ptrace::syscall(child, None)?; // child runs until next stop
+        // -1 means "wait for any child we-re already tracing, not just the first one"
+        // we need to be able to see not only child processes but grandchild processes
+        // as this is where python environments will be executing the binaries that
+        // we need to observe.
+        let status = waitpid::<Option<Pid>>(None, Some(WaitPidFlag::WSTOPPED))?;
 
-        // ------------- THEN WAIT ----------------
-        match waitpid(child, Some(WaitPidFlag::WSTOPPED))? {
+        match status {
+            // ------------- CLONE / FORK / VFORK --------------
+            WaitStatus::PtraceEvent(pid, _sig, event)
+                if event as i32 == libc::PTRACE_EVENT_CLONE
+                    || event as i32 == libc::PTRACE_EVENT_FORK
+                    || event as i32 == libc::PTRACE_EVENT_VFORK =>
+            {
+                let new_raw = ptrace::getevent(pid)? as i32;
+                let new_pid = Pid::from_raw(new_raw);
+                ptrace::setoptions(new_pid, trace_opts)?;
+                ptrace::syscall(new_pid, None)?;
+                ptrace::syscall(pid, None)?;
+            }
+            // ------------------ EXEC ---------------------
+            WaitStatus::PtraceEvent(pid, _, ev) if ev as i32 == libc::PTRACE_EVENT_EXEC => {
+                // log_exec_transition(pid);   // TODO: implement or remove
+                ptrace::syscall(pid, None)?;
+            }
+            // ------------------ SYSCALL STOP -------------
             WaitStatus::PtraceSyscall(pid) => {
                 let (nr, args) = extract(ptrace::getregs(pid)?);
-
                 log::append(format!(
                     "{:.6} {:5} syscall_{nr}({:#x},{:#x},{:#x},{:#x},{:#x},{:#x})",
                     uptime_secs(),
@@ -171,8 +219,9 @@ pub fn run_tracer(child: Pid, argv: &[String]) -> Result<()> {
                     args[4],
                     args[5],
                 ));
+                ptrace::syscall(pid, None)?; // continue to next half-stop
             }
-
+            // ------------------ NORMAL EXIT --------------
             WaitStatus::Exited(pid, code) => {
                 log::append(format!(
                     "{:.6} {:5} exited({})",
@@ -182,8 +231,8 @@ pub fn run_tracer(child: Pid, argv: &[String]) -> Result<()> {
                 ));
                 break;
             }
-
-            WaitStatus::Signaled(pid, sig, _core) => {
+            // ------------------ KILLED BY SIGNAL ---------
+            WaitStatus::Signaled(pid, sig, _core_dumped) => {
                 log::append(format!(
                     "{:.6} {:5} signaled({})",
                     uptime_secs(),
@@ -192,10 +241,11 @@ pub fn run_tracer(child: Pid, argv: &[String]) -> Result<()> {
                 ));
                 break;
             }
-
+            // ------------------ OTHER STOPS --------------
             _ => {
-                // Any other stop (e.g. plain SIGTRAP) loops around; we’ll
-                // hit ptrace::syscall again at the top and keep the child moving.
+                // plain SIGTRAP, job control stop, ect.
+                // just loop back, we'll resume at the top with the next
+                // ptrace::syscall()
             }
         }
     }

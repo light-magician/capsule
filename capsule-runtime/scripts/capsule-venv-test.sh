@@ -6,4 +6,4 @@ source .venv/bin/activate
 capsule trace .venv/bin/python3 hello.py
 
 # poetry init --name=poetrydemo -n --quiet
-# poetry run capsule trace poetry run python hello.py
+# poetry run capsule trace poetry run python3 hello.py

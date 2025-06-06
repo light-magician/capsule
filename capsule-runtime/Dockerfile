@@ -10,6 +10,8 @@ RUN apt-get update && \
         vim git curl && \
     pip install --no-cache-dir pipx && \
     pipx install poetry==1.8.2 && \
+    # make sure pipx’s bin dir is visible for every shell
+    ln -s /root/.local/bin/poetry /usr/local/bin/poetry && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/app

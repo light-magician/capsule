@@ -1,0 +1,10 @@
+services:
+  capsule-integration:
+    container_name: capsule-integration
+    build:
+      context: ..
+      dockerfile: integration/Dockerfile
+    tty: true # keeps stdin open for exec
+    volumes:
+      - ../capsule-runtime:/capsule/capsule-runtime
+      - ../capsule-agents:/capsule/capsule-agents

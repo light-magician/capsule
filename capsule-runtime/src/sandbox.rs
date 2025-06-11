@@ -159,7 +159,9 @@ pub fn run_tracer(child: Pid, argv: &[String]) -> Result<()> {
     //            Allows for re-inspect memory, registers, or log that the process
     //            swapped out its binary image. Useful for trace / audit.
     let trace_opts: ptrace::Options = ptrace::Options::PTRACE_O_TRACESYSGOOD
-        | ptrace::Options::PTRACE_O_EXITKILL
+        // NOTE: blocked out the sandboxing, just tracing right now
+        // TODO: this needs to be extracted into different commands (trace, sandbox, ect) 
+        //| ptrace::Options::PTRACE_O_EXITKILL
         | ptrace::Options::PTRACE_O_TRACECLONE
         | ptrace::Options::PTRACE_O_TRACEFORK
         | ptrace::Options::PTRACE_O_TRACEVFORK

@@ -1,3 +1,40 @@
+//! --------- Why trace this way --------------------------
+//!
+//! strace is a near-complete forensic ledger of everything that
+//! crossed the user kernel boundary. If an attacker opens a file,
+//! starts a shell, dials a C2 domain, spawns a crypto-miner, or
+//! flips capabilities, you will see the syscall entry in black and white.
+//!
+//! What it will NOT tell you is why the program made the call,
+//! what it computed before it, or what encrypted bytes were on the wire.
+//!
+//! --------- What you get with strace --------------------
+//!
+//! strace sits on the ptrace syscall and records
+//! every kernel-userspace transition your program makes.
+//! That means strace observes all:
+//!     - file system accesses
+//!     - networking
+//!     - process control
+//!     - memory-management
+//!     - IPC
+//!     - and signal syscalls
+//! provided you've told strace to follow every
+//! thread and child process. Nothing a program does
+//! can reach the kernel without making on of those syscalls.
+//!
+//! ---------- What you don't get with strace ---------------
+//!
+//! strace only fires when a syscall crosses into the kernel.
+//! pure computation of in memory tampering is invisible.
+//! SOLUTION: combine with eBPF uprobes, perf, or sandbox-level
+//! integrity checks.
+//!
+//! actual payload data
+//! SOLUTION: Parallel packet capture
+//!
+//!
+
 use crate::constants;
 use crate::log;
 use anyhow::{Context, Result};

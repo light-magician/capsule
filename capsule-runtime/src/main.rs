@@ -3,6 +3,7 @@ use std::path::PathBuf;
 mod cli;
 mod constants;
 mod log; // TODO: tail and log should be in a log/ crate
+mod run;
 mod tail;
 mod trace;
 

@@ -1,81 +1,90 @@
-//! A minimal “polling” tail for the Capsule audit log (`capsule tail`).
-//! No notify/notify-debouncer; just sleep + read.
+//! Simple file-follower for syscalls / events / actions.
 
+use crate::constants::*;
+use anyhow::{Result, Context};
 use std::{
-    fs::{File, OpenOptions},
-    io::{BufRead, BufReader, Seek, SeekFrom},
-    path::PathBuf,
-    sync::mpsc::{self, Sender},
+    fs::File,
+    io::{BufRead, BufReader},
     thread,
     time::Duration,
 };
 
-use anyhow::{Context, Result};
-use ctrlc;
+/// Follow a chosen stream in the given (or newest) run directory.
+pub fn tail(stream: &str, run_uuid: Option<String>) -> Result<()> {
+    let run_path = match run_uuid {
+        Some(uuid) => RUN_ROOT.join(uuid),
+        None => newest_run_dir()?,
+    };
 
-use crate::constants::SYSLOG_PATH as DEFAULT_LOG_PATH;
+    // Read the actual log directory from metadata file
+    let log_dir = read_log_dir_from_run(&run_path)?;
 
-/// Entry point for `capsule tail`.
-pub fn tail(file_override: Option<PathBuf>) -> Result<()> {
-    // 1) Decide which file to tail (or use default).
-    let path: PathBuf = file_override.unwrap_or_else(|| DEFAULT_LOG_PATH.into());
+    let filename = match stream {
+        "syscalls" => SYSCALL_FILE,
+        "events" => EVENT_FILE,
+        "actions" => ACTION_FILE,
+        _ => anyhow::bail!("unknown stream {stream}"),
+    };
+    let file_path = log_dir.join(filename);
+    println!("Tailing {file_path:?}");
 
-    // 2) “Touch”/create the file so that opening it for reading won't fail.
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .with_context(|| format!("failed to create/open log file at {:?}", path))?;
+    let f = File::open(&file_path)?;
+    let mut r = BufReader::new(f);
 
-    // 3) Channel for forwarding any new lines from the background thread.
-    let (line_tx, line_rx) = mpsc::channel::<String>();
-
-    // 4) Spawn a background thread that polls the file every 200 ms.
-    spawn_poller(path.clone(), line_tx)?;
-
-    // 5) Install a Ctrl-C handler so we can exit cleanly.
-    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-    {
-        let running = running.clone();
-        ctrlc::set_handler(move || {
-            running.store(false, std::sync::atomic::Ordering::SeqCst);
-        })
-        .expect("failed to install Ctrl-C handler");
-    }
-
-    // 6) In the main thread, loop and print any lines received.
-    while running.load(std::sync::atomic::Ordering::SeqCst) {
-        // Use a 250 ms timeout so we wake up reasonably often to check `running`.
-        if let Ok(line) = line_rx.recv_timeout(Duration::from_millis(250)) {
-            print!("{line}");
+    loop {
+        let mut buf = String::new();
+        let n = r.read_line(&mut buf)?;
+        if n == 0 {
+            thread::sleep(Duration::from_millis(200));
+            continue;
         }
+        print!("{buf}");
     }
-
-    Ok(())
 }
 
-/// Spawn a thread that periodically (every 200 ms) reads any new lines
-/// appended to `path` and sends them down `tx`.
-fn spawn_poller(path: PathBuf, tx: Sender<String>) -> Result<()> {
-    thread::spawn(move || -> Result<()> {
-        // 1) Open the file for reading and seek to EOF so we only see "future" lines.
-        let file = File::open(&path).context("failed to open log file for reading")?;
-        let mut reader = BufReader::new(file);
-        reader.seek(SeekFrom::End(0))?;
+/// Read the log directory path from the run directory's metadata file.
+fn read_log_dir_from_run(run_path: &std::path::Path) -> Result<std::path::PathBuf> {
+    let metadata_path = run_path.join(LOG_DIR_FILE);
+    let log_dir_str = std::fs::read_to_string(&metadata_path)
+        .with_context(|| format!("read log directory metadata from {:?}", metadata_path))?;
+    
+    Ok(std::path::PathBuf::from(log_dir_str.trim()))
+}
 
-        // 2) Loop forever, sleeping between polls.
-        loop {
-            // Read any newly‐appended lines
-            let mut buf = String::new();
-            while reader.read_line(&mut buf)? != 0 {
-                let _ = tx.send(buf.clone()); // ignore send errors on shutdown
-                buf.clear();
-            }
-
-            // Sleep before checking again
-            thread::sleep(Duration::from_millis(200));
+/// Live trace of the most recent run logs.
+pub fn trace_live(stream: &str) -> Result<()> {
+    println!("Starting live trace for {} stream...", stream);
+    
+    // Just tail the newest run - since runs are transient, this is the best we can do
+    match newest_run_dir() {
+        Ok(run_dir) => {
+            let run_uuid = run_dir.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            println!("📡 Tracing {} from most recent run: {}", stream, run_uuid);
+            tail(stream, Some(run_uuid.to_string()))
         }
-    });
+        Err(e) => {
+            println!("⏳ No capsule runs found: {}", e);
+            println!("Run 'capsule run <program>' in another terminal to generate logs.");
+            Ok(())
+        }
+    }
+}
 
-    Ok(())
+
+/// Locate the most-recent run directory under ~/.capsule/run.
+pub fn newest_run_dir() -> Result<std::path::PathBuf> {
+    let mut latest = None;
+    for entry in std::fs::read_dir(&*RUN_ROOT)? {
+        let e = entry?;
+        let md = e.metadata()?;
+        let ts = md.created().or(md.modified())?;
+        if latest.as_ref().map(|(_, t)| ts > *t).unwrap_or(true) {
+            latest = Some((e.path(), ts));
+        }
+    }
+    latest
+        .map(|(p, _)| p)
+        .ok_or_else(|| anyhow::anyhow!("no runs found"))
 }

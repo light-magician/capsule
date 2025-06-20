@@ -22,11 +22,12 @@ pub async fn logger(
     mut rx_raw: Receiver<String>,
     mut rx_evt: Receiver<SyscallEvent>,
     mut rx_act: Receiver<Action>,
+    run_dir: std::path::PathBuf,
 ) -> Result<()> {
     let (mut files, log_dir) = open_files().await?;
     
     // Write log directory path to run directory for tail command
-    write_log_dir_metadata(&log_dir).await?;
+    write_log_dir_metadata(&log_dir, &run_dir).await?;
     let mut hasher = Hasher::new(); // current chain head = zero-hash
 
     // header line
@@ -62,12 +63,13 @@ pub async fn logger_with_ready(
     mut rx_evt: Receiver<SyscallEvent>,
     mut rx_act: Receiver<Action>,
     ready_tx: mpsc::Sender<()>,
+    run_dir: std::path::PathBuf,
 ) -> Result<()> {
     // Signal we're ready to receive data
     ready_tx.send(()).await.ok();
     
     // Now run the normal logger
-    logger(rx_raw, rx_evt, rx_act).await
+    logger(rx_raw, rx_evt, rx_act, run_dir).await
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -115,11 +117,11 @@ async fn write_frame(file: &mut File, chain: &mut blake3::Hasher, payload: &str)
     Ok(())
 }
 
-/// Write log directory path to the current working directory (run directory)
-async fn write_log_dir_metadata(log_dir: &std::path::Path) -> Result<()> {
+/// Write log directory path to the specified run directory
+async fn write_log_dir_metadata(log_dir: &std::path::Path, run_dir: &std::path::Path) -> Result<()> {
     use tokio::io::AsyncWriteExt;
     
-    let metadata_path = std::env::current_dir()?.join(LOG_DIR_FILE);
+    let metadata_path = run_dir.join(LOG_DIR_FILE);
     let mut file = tokio::fs::File::create(&metadata_path).await
         .with_context(|| format!("create metadata file {:?}", metadata_path))?;
     

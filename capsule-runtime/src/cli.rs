@@ -29,4 +29,9 @@ pub enum Cmd {
         #[arg(long, help = "UUID of run to tail (default: latest)")]
         run: Option<String>,
     },
+    /// Live trace of active capsule runs with auto-discovery.
+    Trace {
+        #[arg(value_parser = ["syscalls", "events", "actions"])]
+        stream: String,
+    },
 }

@@ -21,6 +21,7 @@ async fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Run { program, args } => run_transient(program, args).await,
         Cmd::Tail { stream, run } => tail::tail(&stream, run),
+        Cmd::Trace { stream } => tail::trace_live(&stream),
         Cmd::Stop { run } => stop_run(run),
     }
 }
@@ -57,6 +58,7 @@ async fn run_transient(program: String, args: Vec<String>) -> Result<()> {
         rx_evt_logger,
         rx_act_logger,
         ready_tx,
+        run_dir.clone(),
     ));
 
     // Wait for all downstream tasks to signal they're ready

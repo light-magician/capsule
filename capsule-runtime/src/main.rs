@@ -49,8 +49,16 @@ async fn run_transient(program: String, args: Vec<String>) -> Result<()> {
     let (ready_tx, mut ready_rx) = tokio::sync::mpsc::channel::<()>(3);
 
     // Spawn downstream tasks with pre-created receivers
-    let t_parser = tokio::spawn(parser::run_with_ready(rx_raw_parser, tx_evt.clone(), ready_tx.clone()));
-    let t_aggr = tokio::spawn(aggregator::run_with_ready(rx_evt_aggr, tx_act.clone(), ready_tx.clone()));
+    let t_parser = tokio::spawn(parser::run_with_ready(
+        rx_raw_parser,
+        tx_evt.clone(),
+        ready_tx.clone(),
+    ));
+    let t_aggr = tokio::spawn(aggregator::run_with_ready(
+        rx_evt_aggr,
+        tx_act.clone(),
+        ready_tx.clone(),
+    ));
     let t_log = tokio::spawn(io::logger_with_ready(
         rx_raw_logger,
         rx_evt_logger,
@@ -61,7 +69,10 @@ async fn run_transient(program: String, args: Vec<String>) -> Result<()> {
 
     // Wait for all downstream tasks to signal they're ready
     for _ in 0..3 {
-        ready_rx.recv().await.expect("Ready signal from downstream task");
+        ready_rx
+            .recv()
+            .await
+            .expect("Ready signal from downstream task");
     }
 
     // Now start the tracer - guaranteed that all processors are ready
@@ -71,4 +82,3 @@ async fn run_transient(program: String, args: Vec<String>) -> Result<()> {
     let _ = tokio::join!(t_tracer, t_parser, t_aggr, t_log);
     Ok(())
 }
-

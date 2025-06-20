@@ -7,7 +7,7 @@ use chrono::Utc;
 use tokio::{
     fs::{File, OpenOptions},
     io::AsyncWriteExt,
-    sync::broadcast::Receiver,
+    sync::{broadcast::Receiver, mpsc},
 };
 use uuid::Uuid;
 
@@ -55,6 +55,19 @@ pub async fn logger(
         }
     }
     Ok(())
+}
+
+pub async fn logger_with_ready(
+    mut rx_raw: Receiver<String>,
+    mut rx_evt: Receiver<SyscallEvent>,
+    mut rx_act: Receiver<Action>,
+    ready_tx: mpsc::Sender<()>,
+) -> Result<()> {
+    // Signal we're ready to receive data
+    ready_tx.send(()).await.ok();
+    
+    // Now run the normal logger
+    logger(rx_raw, rx_evt, rx_act).await
 }
 
 // ───────────────────────────────────────────────────────────────────

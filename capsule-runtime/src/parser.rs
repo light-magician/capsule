@@ -1,6 +1,7 @@
 use crate::model::SyscallEvent;
 use anyhow::Result;
 use tokio::sync::broadcast::{Receiver, Sender};
+use tokio::sync::mpsc;
 
 /// Public entry: consumes raw strace lines, emits typed events.
 ///
@@ -22,6 +23,14 @@ pub async fn run(mut rx: Receiver<String>, tx_evt: Sender<SyscallEvent>) -> Resu
         }
     }
     Ok(())
+}
+
+pub async fn run_with_ready(mut rx: Receiver<String>, tx_evt: Sender<SyscallEvent>, ready_tx: mpsc::Sender<()>) -> Result<()> {
+    // Signal we're ready to receive data
+    ready_tx.send(()).await.ok();
+    
+    // Now run the normal processing loop
+    run(rx, tx_evt).await
 }
 
 // ── stub parser – replace with a nom state-machine later ─────────────

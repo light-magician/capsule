@@ -11,27 +11,27 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
-    /// Launch an agent and detach.
+    /// Run a program with syscall tracing and logging (foreground mode).
+    /// 
+    /// Examples:
+    ///   capsule run python3 server.py
+    ///   capsule run node app.js
+    ///   capsule run ./my-binary
     Run {
         program: String,
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
-    /// Gracefully stop the most-recent (or specific) run.
-    Stop {
-        #[arg(long, help = "UUID of run to stop (default: latest)")]
-        run: Option<String>,
-    },
-    /// Tail a live or historical log stream.
+    /// Tail a log stream from a run (live following).
+    /// 
+    /// Examples:
+    ///   capsule tail syscalls
+    ///   capsule tail events --run abc123
+    ///   capsule tail actions
     Tail {
         #[arg(value_parser = ["syscalls", "events", "actions"])]
         stream: String,
         #[arg(long, help = "UUID of run to tail (default: latest)")]
         run: Option<String>,
-    },
-    /// Live trace of active capsule runs with auto-discovery.
-    Trace {
-        #[arg(value_parser = ["syscalls", "events", "actions"])]
-        stream: String,
     },
 }

@@ -21,8 +21,6 @@ async fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Run { program, args } => run_transient(program, args).await,
         Cmd::Tail { stream, run } => tail::tail(&stream, run),
-        Cmd::Trace { stream } => tail::trace_live(&stream),
-        Cmd::Stop { run } => stop_run(run),
     }
 }
 
@@ -74,31 +72,3 @@ async fn run_transient(program: String, args: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-fn stop_run(run_uuid: Option<String>) -> Result<()> {
-    // pick explicit UUID or the newest run
-    let run_dir = match run_uuid {
-        Some(u) => constants::RUN_ROOT.join(u),
-        None => tail::newest_run_dir()?,
-    };
-    let pid_path = run_dir.join(constants::PID_FILE);
-    let pid: i32 = fs::read_to_string(&pid_path)?.trim().parse()?;
-
-    use nix::{
-        sys::signal::{kill, Signal},
-        unistd::Pid,
-    };
-    kill(Pid::from_raw(pid), Signal::SIGTERM)?;
-
-    // wait for graceful exit
-    for _ in 0..100 {
-        if !pid_path.exists() {
-            println!("Capsule run stopped.");
-            return Ok(());
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-    // escalate
-    kill(Pid::from_raw(pid), Signal::SIGKILL)?;
-    println!("Forced kill sent.");
-    Ok(())
-}

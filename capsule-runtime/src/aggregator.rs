@@ -200,32 +200,77 @@ fn classify_event(ev: &SyscallEvent) -> Option<(AggregationKey, bool)> {
     }
 }
 
-/// Create an ActionKind from a syscall event
+/// Create an ActionKind from a syscall event, using enrichment data when available
 fn create_action_kind(ev: &SyscallEvent) -> ActionKind {
     match ev.call.as_str() {
-        "read" | "pread64" => ActionKind::FileRead {
-            path: PathBuf::from(format!("fd:{}", ev.args[0])), // Placeholder until enriched
-            bytes: if ev.retval > 0 { ev.retval as usize } else { 0 },
+        "read" | "pread64" => {
+            let fd = ev.args[0] as i32;
+            let path = ev.enrichment.as_ref()
+                .and_then(|ctx| ctx.fd_map.get(&fd))
+                .map(|p| PathBuf::from(p))
+                .unwrap_or_else(|| PathBuf::from(format!("fd:{}", fd)));
+            
+            ActionKind::FileRead {
+                path,
+                bytes: if ev.retval > 0 { ev.retval as usize } else { 0 },
+            }
         },
-        "write" | "pwrite64" => ActionKind::FileWrite {
-            path: PathBuf::from(format!("fd:{}", ev.args[0])), // Placeholder until enriched
-            bytes: if ev.retval > 0 { ev.retval as usize } else { 0 },
+        "write" | "pwrite64" => {
+            let fd = ev.args[0] as i32;
+            let path = ev.enrichment.as_ref()
+                .and_then(|ctx| ctx.fd_map.get(&fd))
+                .map(|p| PathBuf::from(p))
+                .unwrap_or_else(|| PathBuf::from(format!("fd:{}", fd)));
+            
+            ActionKind::FileWrite {
+                path,
+                bytes: if ev.retval > 0 { ev.retval as usize } else { 0 },
+            }
         },
         "fork" | "vfork" | "clone" => ActionKind::ProcessSpawn {
             pid: if ev.retval > 0 { ev.retval as u32 } else { ev.pid },
-            argv: vec![], // Will be filled by enricher
+            argv: ev.enrichment.as_ref()
+                .and_then(|ctx| ctx.argv.clone())
+                .unwrap_or_default(),
             parent_pid: ev.pid,
         },
         "execve" => ActionKind::ProcessExec {
-            argv: vec![], // Will be filled by enricher
+            argv: ev.enrichment.as_ref()
+                .and_then(|ctx| ctx.argv.clone())
+                .unwrap_or_default(),
         },
         "exit" | "exit_group" => ActionKind::ProcessExit {
             pid: ev.pid,
             exit_code: ev.args[0] as i32,
         },
-        "open" | "openat" => ActionKind::FileOpen {
-            path: PathBuf::from("unknown"), // Will be filled by enricher
-            flags: format!("{:#x}", ev.args[1]),
+        "open" | "openat" => {
+            // Try to extract path from enrichment or construct from args
+            let path = ev.enrichment.as_ref()
+                .and_then(|ctx| ctx.cwd.as_ref())
+                .map(|cwd| cwd.join("unknown")) // TODO: parse path from strace args
+                .unwrap_or_else(|| PathBuf::from("unknown"));
+            
+            ActionKind::FileOpen {
+                path,
+                flags: format!("{:#x}", ev.args[1]),
+            }
+        },
+        "socket" => ActionKind::Other {
+            syscall: ev.call.clone(),
+            describe: format!("Socket creation: domain={}, type={}, protocol={}", 
+                ev.args[0], ev.args[1], ev.args[2]),
+        },
+        "connect" => {
+            let fd = ev.args[0] as i32;
+            let socket_desc = ev.enrichment.as_ref()
+                .and_then(|ctx| ctx.fd_map.get(&fd))
+                .cloned()
+                .unwrap_or_else(|| format!("socket:{}", fd));
+            
+            ActionKind::Other {
+                syscall: ev.call.clone(),
+                describe: format!("Connect to {}", socket_desc),
+            }
         },
         _ => ActionKind::Other {
             syscall: ev.call.clone(),

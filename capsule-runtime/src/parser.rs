@@ -45,5 +45,6 @@ fn parse_line(line: &str) -> Option<SyscallEvent> {
         call: "unknown".into(),
         args: [0; 6],
         retval: 0,
+        enrichment: None, // Will be filled by enricher stage
     })
 }

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -11,6 +12,22 @@ pub struct SyscallEvent {
     pub call: String, // syscall name for now
     pub args: [u64; 6],
     pub retval: i64,
+    // Optional enrichment data (filled by enricher stage)
+    pub enrichment: Option<ProcessContext>,
+}
+
+/// Process context metadata attached by the enricher
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessContext {
+    pub exe_path: Option<PathBuf>,
+    pub cwd: Option<PathBuf>,
+    pub argv: Option<Vec<String>>,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+    pub ppid: Option<u32>,
+    pub fd_map: HashMap<i32, String>, // fd -> path/socket description
+    pub capabilities: Option<String>,
+    pub namespaces: HashMap<String, String>, // namespace type -> id
 }
 
 /// High-level semantic action emitted by the aggregator

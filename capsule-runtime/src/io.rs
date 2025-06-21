@@ -14,6 +14,7 @@ use uuid::Uuid;
 struct Files {
     raw: File,
     evt: File,
+    enriched: File,
     act: File,
 }
 
@@ -21,6 +22,7 @@ struct Files {
 pub async fn logger(
     mut rx_raw: Receiver<String>,
     mut rx_evt: Receiver<SyscallEvent>,
+    mut rx_enriched: Receiver<SyscallEvent>,
     mut rx_act: Receiver<Action>,
     run_dir: std::path::PathBuf,
 ) -> Result<()> {
@@ -49,6 +51,10 @@ pub async fn logger(
                 let line = serde_json::to_string(&e)?;
                 write_frame(&mut files.evt, &mut hasher, &line).await?;
             },
+            res = rx_enriched.recv() => if let Ok(e) = res {
+                let line = serde_json::to_string(&e)?;
+                write_frame(&mut files.enriched, &mut hasher, &line).await?;
+            },
             res = rx_act.recv() => if let Ok(a) = res {
                 let line = serde_json::to_string(&a)?;
                 write_frame(&mut files.act, &mut hasher, &line).await?;
@@ -61,6 +67,7 @@ pub async fn logger(
 pub async fn logger_with_ready(
     mut rx_raw: Receiver<String>,
     mut rx_evt: Receiver<SyscallEvent>,
+    mut rx_enriched: Receiver<SyscallEvent>,
     mut rx_act: Receiver<Action>,
     ready_tx: mpsc::Sender<()>,
     run_dir: std::path::PathBuf,
@@ -69,7 +76,7 @@ pub async fn logger_with_ready(
     ready_tx.send(()).await.ok();
     
     // Now run the normal logger
-    logger(rx_raw, rx_evt, rx_act, run_dir).await
+    logger(rx_raw, rx_evt, rx_enriched, rx_act, run_dir).await
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -99,6 +106,7 @@ async fn open_files() -> Result<(Files, std::path::PathBuf)> {
     Ok((Files {
         raw: create(&dir, SYSCALL_FILE).await?,
         evt: create(&dir, EVENT_FILE).await?,
+        enriched: create(&dir, "enriched.jsonl").await?,
         act: create(&dir, ACTION_FILE).await?,
     }, dir))
 }

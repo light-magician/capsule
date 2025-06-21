@@ -76,3 +76,17 @@ Raw strace lines → SyscallEvent structs → Action structs → Log files
 - Aggregator is 1:1 passthrough - intended for sliding window coalescing  
 - Uses structured logging with timestamps and UUIDs for run identification
 - Error handling uses anyhow crate throughout
+
+## Development Workflow
+
+When implementing new features:
+1. Complete each implementation step fully
+2. Notify when step is complete for build verification
+3. After build confirmation, provide a concise commit message following the format:
+   ```
+   feat: brief description of main changes
+   
+   - Bullet point of key implementation detail
+   - Another key architectural change
+   - Preparation note for future eBPF integration (if applicable)
+   ```

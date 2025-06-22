@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::sync::{mpsc, Semaphore};
 use tokio::time;
+use tokio_util::sync::CancellationToken;
 
 /// Cache entry for process context data
 #[derive(Debug, Clone)]
@@ -37,6 +38,16 @@ impl Enricher {
         mut rx_evt: Receiver<SyscallEvent>,
         tx_enriched: Sender<SyscallEvent>,
     ) -> Result<()> {
+        self.run_with_cancellation(rx_evt, tx_enriched, CancellationToken::new()).await
+    }
+
+    /// Main enricher loop with cancellation support
+    pub async fn run_with_cancellation(
+        mut self,
+        mut rx_evt: Receiver<SyscallEvent>,
+        tx_enriched: Sender<SyscallEvent>,
+        cancellation_token: CancellationToken,
+    ) -> Result<()> {
         let mut cleanup_interval = time::interval(Duration::from_secs(10));
 
         loop {
@@ -58,6 +69,13 @@ impl Enricher {
                 // Periodic cache cleanup
                 _ = cleanup_interval.tick() => {
                     self.cleanup_expired_entries();
+                },
+                
+                // Graceful shutdown signal
+                _ = cancellation_token.cancelled() => {
+                    println!("Enricher received cancellation, cleaning up cache...");
+                    self.cache.clear();
+                    break;
                 }
             }
         }
@@ -252,4 +270,19 @@ pub async fn run_with_ready(
     
     // Run the enricher
     enricher.run(rx_evt, tx_enriched).await
+}
+
+/// Run enricher with ready synchronization and cancellation support
+pub async fn run_with_ready_and_cancellation(
+    enricher: Enricher,
+    rx_evt: Receiver<SyscallEvent>,
+    tx_enriched: Sender<SyscallEvent>,
+    ready_tx: mpsc::Sender<()>,
+    cancellation_token: CancellationToken,
+) -> Result<()> {
+    // Signal we're ready to receive data
+    ready_tx.send(()).await.ok();
+    
+    // Run the enricher with cancellation support
+    enricher.run_with_cancellation(rx_evt, tx_enriched, cancellation_token).await
 }

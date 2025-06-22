@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::sync::mpsc;
 use tokio::time;
+use tokio_util::sync::CancellationToken;
 
 /// Aggregation key for grouping related syscalls
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -31,6 +32,15 @@ struct PendingAction {
 
 /// Groups bursts of low-level events into semantic `Action`s using sliding windows
 pub async fn run(mut rx_evt: Receiver<SyscallEvent>, tx_act: Sender<Action>) -> Result<()> {
+    run_with_cancellation(rx_evt, tx_act, CancellationToken::new()).await
+}
+
+/// Groups bursts of low-level events with cancellation support
+pub async fn run_with_cancellation(
+    mut rx_evt: Receiver<SyscallEvent>,
+    tx_act: Sender<Action>,
+    cancellation_token: CancellationToken,
+) -> Result<()> {
     let mut pending: HashMap<AggregationKey, PendingAction> = HashMap::new();
     let mut flush_interval = time::interval(Duration::from_millis(100));
     
@@ -54,6 +64,12 @@ pub async fn run(mut rx_evt: Receiver<SyscallEvent>, tx_act: Sender<Action>) -> 
                 for action in stale_actions {
                     let _ = tx_act.send(action);
                 }
+            },
+            
+            // Graceful shutdown signal
+            _ = cancellation_token.cancelled() => {
+                println!("Aggregator received cancellation, flushing pending actions...");
+                break;
             }
         }
     }
@@ -327,4 +343,17 @@ pub async fn run_with_ready(mut rx_evt: Receiver<SyscallEvent>, tx_act: Sender<A
     
     // Now run the normal processing loop
     run(rx_evt, tx_act).await
+}
+
+pub async fn run_with_ready_and_cancellation(
+    rx_evt: Receiver<SyscallEvent>,
+    tx_act: Sender<Action>,
+    ready_tx: mpsc::Sender<()>,
+    cancellation_token: CancellationToken,
+) -> Result<()> {
+    // Signal we're ready to receive data
+    ready_tx.send(()).await.ok();
+    
+    // Now run with cancellation support
+    run_with_cancellation(rx_evt, tx_act, cancellation_token).await
 }

@@ -9,9 +9,11 @@ use std::path::PathBuf;
 pub struct SyscallEvent {
     pub ts: u64, // microseconds since boot
     pub pid: u32,
-    pub call: String, // syscall name for now
-    pub args: [u64; 6],
+    pub call: String, // syscall name
+    pub args: [u64; 6], // basic numeric args only
     pub retval: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_line: Option<String>, // full strace line (truncated if too long)
     // Optional enrichment data (filled by enricher stage)
     pub enrichment: Option<ProcessContext>,
 }

@@ -1,0 +1,136 @@
+ Process Architecture
+
+  1. Main Process (tokio executor)
+  - Single OS process running tokio::main
+  - Tokio runtime manages a thread pool (typically N=CPU cores)
+  - All "tasks" are async green threads, NOT OS threads
+
+  2. Subprocess Creation
+  - strace spawned as separate OS process via Command::new("strace")
+  - strace gets its own process group for signal management
+  - Target program runs as child of strace (ptrace relationship)
+
+  Threading Model
+
+  Main Process Structure:
+  Main OS Process
+  ├── Tokio Thread Pool (4-8 OS threads)
+  └── Child Process: strace
+      └── Child Process: target program
+
+  Async Task Architecture:
+  5 Concurrent Tokio Tasks (green threads):
+  ├── Tracer Task      (reads strace stderr)
+  ├── Parser Task      (processes raw lines)
+  ├── Enricher Task    (adds /proc metadata)
+  ├── Aggregator Task  (groups syscalls)
+  └── Logger Task      (writes 4 log streams)
+
+  Data Pipeline Flow
+
+  Stage 1: Tracer (trace.rs:47-65)
+
+  // OS process spawned
+  strace -f -tt -yy -v -x -s 1000 -- target_program
+
+  // Async task reads stderr line-by-line
+  let mut rdr = BufReader::new(stderr).lines();
+  while let Some(line) = rdr.next_line().await? {
+      tx_raw.send(line);  // Broadcast to raw channel
+  }
+
+  Threading: Single async task, no OS threads created. Uses tokio's async I/O to read from subprocess pipe.
+
+  Stage 2: Parser (parser.rs:33-89)
+
+  // Receives from broadcast channel
+  tokio::select! {
+      recv_result = rx.recv() => {
+          match parse_line(&line) {
+              Some(evt) => tx_evt.send(evt),  // Broadcast SyscallEvent
+          }
+      }
+  }
+
+  Threading: Single async task. Simple regex parsing - extracts timestamp and syscall name only.
+
+  Stage 3: Enricher (enricher.rs:56-84)
+
+  // Receives SyscallEvent, enriches with /proc data
+  match rx_evt.recv() => {
+      Ok(mut event) => {
+          // Concurrent /proc filesystem reads (rate-limited)
+          if let Ok(context) = self.get_process_context(event.pid).await {
+              event.enrichment = Some(context);
+          }
+          tx_enriched.send(event);  // Broadcast EnrichedEvent
+      }
+  }
+
+  Threading: Single async task + semaphore-limited concurrent /proc reads. No new OS threads - uses tokio's async
+  filesystem I/O.
+
+  Stage 4: Aggregator (sliding window logic)
+
+  - Groups related syscalls using AggregationKey(pid, fd, operation_type)
+  - Maintains pending actions with 100ms timeout
+  - Single async task with interval timer
+
+  Stage 5: Logger (io.rs)
+
+  // Spawns 4 separate async tasks - one per log stream
+  task_set.spawn(log_writer_task(rx_raw, "syscalls.log"));
+  task_set.spawn(log_writer_task(rx_evt, "events.jsonl"));
+  task_set.spawn(log_writer_task(rx_enriched, "enriched.jsonl"));
+  task_set.spawn(log_writer_task(rx_act, "actions.jsonl"));
+
+  Threading: 4 additional async tasks (still green threads). Each maintains Blake3 hash chain state.
+
+  Inter-Task Communication
+
+  Broadcast Channels:
+  let (tx_raw, _) = broadcast::channel::<String>(4096);          // Raw strace lines
+  let (tx_evt, _) = broadcast::channel::<SyscallEvent>(2048);    // Parsed events
+  let (tx_enriched, _) = broadcast::channel::<SyscallEvent>(2048); // + /proc data
+  let (tx_act, _) = broadcast::channel::<Action>(1024);          // Aggregated actions
+
+  Ready Synchronization:
+  // Ensures downstream tasks are listening before upstream starts
+  let (ready_tx, mut ready_rx) = mpsc::channel::<()>(4);
+  for _ in 0..4 { ready_rx.recv().await; }  // Wait for all 4 tasks
+
+  Structured Concurrency
+
+  JoinSet Management:
+  let mut task_set = JoinSet::new();        // Tracks all async tasks
+  let cancellation_token = CancellationToken::new();  // Global shutdown signal
+
+  // All tasks use tokio::select! with cancellation
+  _ = cancellation_token.cancelled() => break;
+
+  Graceful Shutdown:
+  1. Main program exits OR Ctrl+C received
+  2. cancellation_token.cancel() signals all tasks
+  3. Tasks finish current work and exit their loops
+  4. 5-second timeout for graceful shutdown
+  5. Force abort any remaining tasks
+
+  Key Unix Process Details
+
+  Signal Handling:
+  - Ctrl+C caught by tokio signal handler
+  - strace process group killed with SIGTERM → SIGKILL escalation
+  - Process group management prevents zombie children
+
+  File Descriptors:
+  - strace stdout → inherited (user sees program output)
+  - strace stderr → piped to tracer task
+  - Multiple log files opened by logger tasks
+
+  No OS Thread Creation:
+  - Everything runs on tokio's thread pool
+  - Async I/O prevents blocking
+  - Only subprocess is the strace process itself
+
+  The entire pipeline is event-driven with backpressure via broadcast channel buffer limits. If enricher falls behind,
+  it'll get RecvError::Lagged and skip messages rather than blocking the pipeline.

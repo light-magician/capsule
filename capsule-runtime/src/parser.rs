@@ -158,7 +158,30 @@ fn parse_line(line: &str) -> Option<SyscallEvent> {
         call: syscall_name,
         args: [0; 6], // Simplified - no arg parsing
         retval: 0, // Simplified - no retval parsing
-        raw_line: Some(line.to_string()),
+        raw_line: line.to_string(),
+        
+        // Initialize all new fields as None/empty
+        tid: None,
+        ppid: None,
+        exe_path: None,
+        cwd: None,
+        uid: None,
+        gid: None,
+        euid: None,
+        egid: None,
+        caps: None,
+        fd: None,
+        abs_path: None,
+        resource_type: None,
+        operation: None,
+        perm_bits: None,
+        byte_count: None,
+        latency_us: None,
+        net: None,
+        risk_tags: Vec::new(),
+        high_level_kind: None,
+        
+        // Legacy compatibility
         enrichment: None,
     })
 }

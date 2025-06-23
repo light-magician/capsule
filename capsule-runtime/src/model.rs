@@ -158,6 +158,8 @@ pub struct ProcessContext {
     pub argv: Option<Vec<String>>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
+    pub euid: Option<u32>,
+    pub egid: Option<u32>,
     pub ppid: Option<u32>,
     pub fd_map: HashMap<i32, String>, // fd -> path/socket description
     pub capabilities: Option<String>,

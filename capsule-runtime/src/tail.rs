@@ -22,6 +22,7 @@ pub fn tail(stream: &str, run_uuid: Option<String>) -> Result<()> {
     let filename = match stream {
         "syscalls" => SYSCALL_FILE,
         "events" => EVENT_FILE,
+        "enriched" => ENRICHED_FILE,
         "actions" => ACTION_FILE,
         _ => anyhow::bail!("unknown stream {stream}"),
     };

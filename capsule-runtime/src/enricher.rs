@@ -56,9 +56,18 @@ impl Enricher {
                 event_result = rx_evt.recv() => {
                     match event_result {
                         Ok(mut event) => {
-                            // Enrich the event with process context
-                            if let Ok(context) = self.get_process_context(event.pid).await {
-                                event.enrichment = Some(context);
+                            // Enrich the event with process context directly in SyscallEvent fields
+                            match self.get_process_context(event.pid).await {
+                                Ok(context) => {
+                                    eprintln!("DEBUG: Enricher successfully got context for PID {}: exe={:?}, uid={:?}", 
+                                             event.pid, context.exe_path, context.uid);
+                                    self.populate_event_fields(&mut event, &context);
+                                    // Keep legacy field for backward compatibility during transition
+                                    event.enrichment = Some(context);
+                                },
+                                Err(e) => {
+                                    eprintln!("DEBUG: Enricher failed to get context for PID {}: {}", event.pid, e);
+                                }
                             }
                             let _ = tx_enriched.send(event);
                         },
@@ -81,6 +90,24 @@ impl Enricher {
         }
         
         Ok(())
+    }
+
+    /// Populate SyscallEvent fields directly from ProcessContext
+    fn populate_event_fields(&self, event: &mut SyscallEvent, context: &ProcessContext) {
+        // Convert ProcessContext data to EnhancedEvent fields
+        event.ppid = context.ppid;
+        event.exe_path = context.exe_path.as_ref().map(|p| p.to_string_lossy().to_string());
+        event.cwd = context.cwd.as_ref().map(|p| p.to_string_lossy().to_string());
+        event.uid = context.uid;
+        event.gid = context.gid;
+        event.euid = context.euid;
+        event.egid = context.egid;
+        
+        // Parse capabilities from hex string to u64 bitmap
+        event.caps = context.capabilities.as_ref()
+            .and_then(|cap_str| u64::from_str_radix(cap_str, 16).ok());
+        
+        // Note: fd mapping and namespace info is in legacy ProcessContext for now
     }
 
     /// Get process context for a PID, using cache when available
@@ -115,7 +142,7 @@ impl Enricher {
         let exe_path = self.read_exe_path(pid).await;
         let cwd = self.read_cwd(pid).await;
         let argv = self.read_cmdline(pid).await;
-        let (uid, gid, ppid) = self.read_status(pid).await;
+        let (uid, gid, euid, egid, ppid) = self.read_status(pid).await;
         let fd_map = self.read_fd_map(pid).await;
         let capabilities = self.read_capabilities(pid).await;
         let namespaces = self.read_namespaces(pid).await;
@@ -127,6 +154,8 @@ impl Enricher {
             uid,
             gid,
             ppid,
+            euid,
+            egid,
             fd_map,
             capabilities,
             namespaces,
@@ -168,26 +197,36 @@ impl Enricher {
         }
     }
 
-    /// Read UID, GID, and PPID from /proc/pid/status
-    async fn read_status(&self, pid: u32) -> (Option<u32>, Option<u32>, Option<u32>) {
+    /// Read UID, GID, EUID, EGID, and PPID from /proc/pid/status
+    async fn read_status(&self, pid: u32) -> (Option<u32>, Option<u32>, Option<u32>, Option<u32>, Option<u32>) {
         let status_path = format!("/proc/{}/status", pid);
         let content = match fs::read_to_string(&status_path) {
             Ok(c) => c,
-            Err(_) => return (None, None, None),
+            Err(_) => return (None, None, None, None, None),
         };
 
         let mut uid = None;
         let mut gid = None;
+        let mut euid = None;
+        let mut egid = None;
         let mut ppid = None;
 
         for line in content.lines() {
             if line.starts_with("Uid:") {
-                if let Some(uid_str) = line.split_whitespace().nth(1) {
-                    uid = uid_str.parse().ok();
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    uid = parts[1].parse().ok();  // Real UID
+                }
+                if parts.len() >= 3 {
+                    euid = parts[2].parse().ok(); // Effective UID
                 }
             } else if line.starts_with("Gid:") {
-                if let Some(gid_str) = line.split_whitespace().nth(1) {
-                    gid = gid_str.parse().ok();
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    gid = parts[1].parse().ok();  // Real GID
+                }
+                if parts.len() >= 3 {
+                    egid = parts[2].parse().ok(); // Effective GID
                 }
             } else if line.starts_with("PPid:") {
                 if let Some(ppid_str) = line.split_whitespace().nth(1) {
@@ -196,7 +235,7 @@ impl Enricher {
             }
         }
 
-        (uid, gid, ppid)
+        (uid, gid, euid, egid, ppid)
     }
 
     /// Read file descriptor mappings from /proc/pid/fd/

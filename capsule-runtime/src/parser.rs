@@ -143,25 +143,26 @@ fn parse_line(line: &str) -> Option<SyscallEvent> {
         }
     }
     
-    // Extract timestamp and syscall name - super simple approach
-    let (timestamp, syscall_name) = extract_timestamp_and_syscall(clean_line)?;
+    // Extract all strace data - enhanced parsing
+    let (timestamp, pid, tid, syscall_name, args, retval) = extract_strace_data(clean_line)?;
     
     unsafe {
         if DEBUG_COUNT <= 10 {
-            eprintln!("DEBUG: Extracted: ts={}, call={}", timestamp, syscall_name);
+            eprintln!("DEBUG: Extracted: ts={}, pid={}, tid={:?}, call={}, retval={}", 
+                     timestamp, pid, tid, syscall_name, retval);
         }
     }
     
     Some(SyscallEvent {
         ts: (timestamp * 1_000_000.0) as u64,
-        pid: 0, // Simplified - no PID parsing for now
+        pid,
         call: syscall_name,
-        args: [0; 6], // Simplified - no arg parsing
-        retval: 0, // Simplified - no retval parsing
+        args,
+        retval,
         raw_line: line.to_string(),
         
         // Initialize all new fields as None/empty
-        tid: None,
+        tid,
         ppid: None,
         exe_path: None,
         cwd: None,
@@ -186,36 +187,139 @@ fn parse_line(line: &str) -> Option<SyscallEvent> {
     })
 }
 
-/// Extract just timestamp and syscall name from strace line
-fn extract_timestamp_and_syscall(line: &str) -> Option<(f64, String)> {
-    // Skip optional [pid NNN] prefix
-    let line = if line.starts_with('[') {
-        if let Some(bracket_end) = line.find(']') {
-            line[bracket_end + 1..].trim_start()
+/// Extract timestamp, PID, syscall name, args, and retval from strace line
+fn extract_strace_data(line: &str) -> Option<(f64, u32, Option<u32>, String, [u64; 6], i64)> {
+    let original_line = line;
+    
+    // Extract PID and TID from [pid NNNN] or [pid NNNN TTTT] prefix
+    let (pid, tid, line_after_pid) = if line.starts_with('[') {
+        let bracket_end = line.find(']')?;
+        let pid_section = &line[1..bracket_end]; // Remove [ and ]
+        let line_remainder = line[bracket_end + 1..].trim_start();
+        
+        if pid_section.starts_with("pid") {
+            let pid_parts: Vec<&str> = pid_section.split_whitespace().collect();
+            if pid_parts.len() >= 2 {
+                let pid = pid_parts[1].parse::<u32>().ok()?;
+                let tid = if pid_parts.len() >= 3 {
+                    pid_parts[2].parse::<u32>().ok()
+                } else {
+                    None
+                };
+                (pid, tid, line_remainder)
+            } else {
+                return None;
+            }
         } else {
-            line
+            return None;
         }
     } else {
-        line
+        // No PID prefix, assume PID 0
+        (0, None, line)
     };
     
-    // Find first space (end of timestamp)
-    let space_pos = line.find(' ')?;
-    let timestamp_str = &line[..space_pos];
-    let remainder = &line[space_pos + 1..];
-    
-    // Parse timestamp
+    // Extract timestamp (first token after PID)
+    let space_pos = line_after_pid.find(' ')?;
+    let timestamp_str = &line_after_pid[..space_pos];
+    let remainder = &line_after_pid[space_pos + 1..];
     let timestamp = parse_strace_timestamp(timestamp_str)?;
     
-    // Extract syscall name (everything before first '(')
-    let paren_pos = remainder.find('(')?;
-    let syscall_name = remainder[..paren_pos].trim().to_string();
+    // Handle resumed syscalls like "<... fstat resumed>"
+    let (syscall_name, args_section) = if remainder.starts_with("<...") {
+        // Extract syscall name from "<... syscall_name resumed>"
+        let parts: Vec<&str> = remainder.split_whitespace().collect();
+        if parts.len() >= 3 && parts[2] == "resumed>" {
+            let syscall = parts[1].to_string();
+            // For resumed calls, we can't easily parse args, so return zeros
+            return Some((timestamp, pid, tid, syscall, [0; 6], 0));
+        } else {
+            return None;
+        }
+    } else {
+        // Normal syscall: extract name and arguments
+        let paren_pos = remainder.find('(')?;
+        let syscall_name = remainder[..paren_pos].trim().to_string();
+        
+        // Find the closing parenthesis for args
+        let equals_pos = remainder.rfind(" = ")?;
+        let args_section = &remainder[paren_pos + 1..equals_pos];
+        
+        (syscall_name, args_section)
+    };
     
     if syscall_name.is_empty() {
         return None;
     }
     
-    Some((timestamp, syscall_name))
+    // Parse return value (everything after " = ")
+    let equals_pos = remainder.rfind(" = ")?;
+    let retval_section = &remainder[equals_pos + 3..];
+    let retval = parse_return_value(retval_section);
+    
+    // Parse arguments (simplified - extract up to 6 numeric values)
+    let args = parse_syscall_args(args_section);
+    
+    Some((timestamp, pid, tid, syscall_name, args, retval))
+}
+
+/// Parse return value from strace output (handles -1 ERRNO cases)
+fn parse_return_value(retval_str: &str) -> i64 {
+    // Handle cases like "0", "-1 EINVAL (Invalid argument)", "1024"
+    let first_token = retval_str.split_whitespace().next().unwrap_or("0");
+    first_token.parse::<i64>().unwrap_or(0)
+}
+
+/// Parse syscall arguments (simplified extraction of numeric values)
+fn parse_syscall_args(args_str: &str) -> [u64; 6] {
+    let mut args = [0u64; 6];
+    let mut arg_count = 0;
+    
+    // Split by commas and try to extract numeric values
+    for arg in args_str.split(',') {
+        if arg_count >= 6 {
+            break;
+        }
+        
+        let arg = arg.trim();
+        
+        // Try to parse different numeric formats
+        if let Some(val) = parse_numeric_arg(arg) {
+            args[arg_count] = val;
+        }
+        
+        arg_count += 1;
+    }
+    
+    args
+}
+
+/// Parse individual numeric argument (handles hex, decimal, constants)
+fn parse_numeric_arg(arg: &str) -> Option<u64> {
+    let arg = arg.trim();
+    
+    // Handle hex values like 0xffffffff
+    if arg.starts_with("0x") {
+        return u64::from_str_radix(&arg[2..], 16).ok();
+    }
+    
+    // Handle negative numbers
+    if arg.starts_with('-') {
+        if let Ok(val) = arg.parse::<i64>() {
+            return Some(val as u64);
+        }
+    }
+    
+    // Handle positive decimal
+    if let Ok(val) = arg.parse::<u64>() {
+        return Some(val);
+    }
+    
+    // Handle special constants (simplified)
+    match arg {
+        "AT_FDCWD" => Some((-100i64) as u64),
+        "NULL" => Some(0),
+        _ => None,
+    }
 }
 
 

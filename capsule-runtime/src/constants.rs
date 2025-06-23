@@ -32,6 +32,7 @@ pub const LOG_DIR_FILE: &str = "log_dir.txt";
 pub const SYSCALL_FILE: &str = "syscalls.log";
 pub const EVENT_FILE: &str = "events.jsonl";
 pub const ACTION_FILE: &str = "actions.jsonl";
+pub const PARSE_ERROR_FILE: &str = "parse_errors.log";
 
 /// Ensure ~/.capsule, run/, and logs/ exist.  Call once during CLI startup.
 pub fn ensure_dirs() -> std::io::Result<()> {

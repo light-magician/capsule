@@ -27,9 +27,10 @@ pub enum Cmd {
     /// Examples:
     ///   capsule tail syscalls
     ///   capsule tail events --run abc123
+    ///   capsule tail enriched
     ///   capsule tail actions
     Tail {
-        #[arg(value_parser = ["syscalls", "events", "actions"])]
+        #[arg(value_parser = ["syscalls", "events", "enriched", "actions"])]
         stream: String,
         #[arg(long, help = "UUID of run to tail (default: latest)")]
         run: Option<String>,

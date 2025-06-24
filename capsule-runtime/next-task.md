@@ -1,59 +1,112 @@
-Capsule today launches a traced process under strace, turns each raw line into a SyscallEvent, and dumps those events to a JSON-lines file. Everything else—context enrichment, action roll-ups, profile generation—is still on the whiteboard. The upgrade path is therefore to bolt richer stages onto the existing stream one at a time, keeping each stage independent so we can later swap strace out for eBPF without touching downstream logic.
+## EnhancedEvent – formal requirements
 
-Recommended implementation order
-Action vocabulary + enum expansion
+_Must_ = mandatory for v1  *Should* = strongly recommended  *May* = optional / future-proof
 
-Sliding-window aggregator
+### 1. Purpose
 
-Context enricher
+A single EnhancedEvent is the canonical, self-contained record for one syscall after the Enricher stage. It carries all data required by downstream Aggregator, Reporter and Policy-Generator tasks without additional /proc look-ups.
 
-Action/event log writer refactor
+### 2. Structural rules
 
-Profile generator
+1. **JSON object** written one-per-line to `enriched.jsonl`.
+2. Keys never removed once published; new keys added only with `null` default for backward compatibility.
+3. Entire object **Clone + Send + Sync** in Rust; target size ≤ 1 KiB (typical ≈ 300 B).
+4. All time values are **µs since tracer start** (`u64`).
+5. Optional fields that do not apply are encoded as JSON `null`.
 
-Structured-concurrency wiring
+### 3. Field specification
 
-Step-by-step details
+| Key               | Type                  | Must/Should/May | Description / Source                                        |           |                            |          |     |        |                                              |
+| ----------------- | --------------------- | --------------- | ----------------------------------------------------------- | --------- | -------------------------- | -------- | --- | ------ | -------------------------------------------- |
+| `ts`              | `u64`                 | Must            | Microsecond timestamp (from strace `-tt`).                  |           |                            |          |     |        |                                              |
+| `pid`             | `u32`                 | Must            | Linux PID of calling thread (parsed).                       |           |                            |          |     |        |                                              |
+| `tid`             | `u32`                 | Should          | TID when different from PID (clone).                        |           |                            |          |     |        |                                              |
+| `ppid`            | `u32`                 | Should          | Parent PID snapshot (`/proc/<pid>/status`).                 |           |                            |          |     |        |                                              |
+| `call`            | `String`              | Must            | Syscall name (`openat`, `connect`, …).                      |           |                            |          |     |        |                                              |
+| `args`            | `[u64;6]`             | Must            | Raw six argument words (unchanged).                         |           |                            |          |     |        |                                              |
+| `retval`          | `i64`                 | Must            | Return value as printed by strace.                          |           |                            |          |     |        |                                              |
+| `raw_line`        | `String`              | Must            | Original strace line for provenance.                        |           |                            |          |     |        |                                              |
+| `raw_hash`        | `String` (hex-blake3) | Should          | `blake3(raw_line)`, builds hash-chain.                      |           |                            |          |     |        |                                              |
+| `exe_path`        | `String`              | Should          | Absolute path of `/proc/<pid>/exe`.                         |           |                            |          |     |        |                                              |
+| `cwd`             | `String`              | Should          | Current working directory (`/proc/<pid>/cwd`).              |           |                            |          |     |        |                                              |
+| `uid` / `gid`     | `u32`                 | Should          | Real UID / GID at event time.                               |           |                            |          |     |        |                                              |
+| `euid` / `egid`   | `u32`                 | May             | Effective IDs if different.                                 |           |                            |          |     |        |                                              |
+| `caps`            | `u64` bit-mask        | May             | `CapEff` bitmap from status (Linux ≤ 64 caps).              |           |                            |          |     |        |                                              |
+| `fd`              | `i32`                 | May             | FD number referenced by the syscall (−1 if none).           |           |                            |          |     |        |                                              |
+| `abs_path`        | `String`              | May             | Resolved absolute path for pathname or FD.                  |           |                            |          |     |        |                                              |
+| `resource_type`   | \`"FILE"              | "DIR"           | "SOCKET"                                                    | "PIPE"    | "SHM"                      | "PROCFS" | …\` | Should | High-level kind after resolution.            |
+| `operation`       | \`"READ"              | "WRITE"         | "EXEC"                                                      | "CONNECT" | "BIND"                     | "STAT"   | …\` | Should | Semantic intent derived from `call` + flags. |
+| `perm_bits`       | `u32`                 | May             | Octal mode from `openat`, `chmod`, etc.                     |           |                            |          |     |        |                                              |
+| `byte_count`      | `u64`                 | May             | Size requested / transferred (read, write, send…).          |           |                            |          |     |        |                                              |
+| `net`             | object or `null`      | May             | Populated for socket syscalls → see below.                  |           |                            |          |     |        |                                              |
+| `latency_us`      | `u64`                 | May             | Δ between entry/exit lines when captured.                   |           |                            |          |     |        |                                              |
+| `risk_tags`       | `Vec<String>`         | May             | Zero-or-more heuristic flags (`"TMP_EXEC"`, `"PRIV_ESC"`…). |           |                            |          |     |        |                                              |
+| `high_level_kind` | \`"FileRead"          | "NetConnect"    | …\`                                                         | Should    | Bucket used by Aggregator. |          |     |        |                                              |
 
-1. Action vocabulary
-   Add explicit variants for file reads, writes, directory listings, socket connects, process spawns, signals, and a catch-all. This gives later stages a target schema.
+`net` sub-object (present only when `resource_type=="SOCKET"`):
 
-2. Aggregator
-   Maintain a map keyed by pid + fd (or socket). Merge consecutive compatible events until the window goes quiet, then emit one Action. Flush and remove the key when the fd closes or the process exits.
+```json
+{
+  "family": "AF_INET"|"AF_INET6"|"AF_UNIX"|"AF_NETLINK",
+  "protocol": "TCP"|"UDP"|...,
+  "local_addr": "127.0.0.1",
+  "local_port": 8000,
+  "remote_addr": "1.2.3.4",
+  "remote_port": 443
+}
+```
 
-3. Enricher
-   For every incoming SyscallEvent that lacks context, query /proc once, cache the result for a short TTL, and attach: full path for fds, user/group/cap set, socket endpoints, cwd, etc. Rate-limit expensive look-ups.
+### 4. Mapping & enrichment logic (non-blocking)
 
-4. Action/event log writer
-   Split the writer into two independent Tokio tasks: one receives raw events, the other receives actions. Both append in JSONL format, hash-chain each line, and publish to a broadcast channel for live subscribers.
+1. Resolver keeps **Process table** and **FD table** in-memory (updated on `open*`, `socket`, `connect`, `chdir`, `execve`, `close`, …).
+2. Enricher receives `SyscallEvent`, clones read-only snapshots of both tables, fills as many fields as possible synchronously.
+3. Heavy work (SHA-256 of large binaries, DNS reverse look-ups) is _off-loaded_ to a low-priority background task that patches events _in-place_ before the Logger task flushes its buffer.
+4. If enrichment fails within 2 ms budget, leave optional fields `null` and set `risk_tags += ["ENRICH_TIMEOUT"]`.
 
-5. Profile generator
-   After the traced process exits, collect the set of unique Actions, summarise them into a simple YAML allow-list (paths, hosts, binaries), and write capsule-profile.yml. Later runs can diff live actions against this file to spot violations.
+### 5. Concurrency & back-pressure guarantees
 
-6. Structured-concurrency wiring
-   Launch every stage (tracer, parser, enricher, aggregator, both writers, profile generator) inside a single JoinSet. Pass a cancellation token so that when the tracer finishes or fails, all other tasks shut down in order, flushing their buffers first.
+- Enricher must never await on blocking FS I/O without a timeout; all `/proc` reads go through `tokio::fs` and are governed by a `Semaphore` (N = 32).
+- On `broadcast::error::Lagged`, skip enrichment altogether and set `risk_tags += ["PIPE_BACKPRESSURE"]`.
+- Logger owns the Blake3 rolling hash; it appends `raw_hash` from each event into `state = blake3::keyed(state, raw_hash)` before writing, ensuring tamper-evident chain across log streams.
 
-Why this order works
-Vocabulary first sets the contract. Aggregation next collapses noise early so later stages handle less data. Enrichment then attaches the extra insight needed for useful profiles. Separating writers prevents back-pressure in one stream from blocking the other. Finally, structured concurrency guarantees clean shutdowns and makes it easy to drop in an eBPF tracer later without rewriting aggregation, enrichment, or logging.
+### 6. Example (abridged)
 
-Further Details on Enrichment
+```json
+{
+  "ts": 4768313139,
+  "pid": 1351,
+  "tid": 1351,
+  "ppid": 1340,
+  "call": "newfstatat",
+  "args": [-100, 139890402500864, 139755259461984, 0, 0, 0],
+  "retval": 0,
+  "raw_line": "[pid 1351] 01:19:28.313139 newfstatat(AT_FDCWD, \"/capsule/.../__init__.py\", ... ) = 0",
+  "raw_hash": "76fa63e8…",
+  "exe_path": "/usr/bin/python3.9",
+  "cwd": "/capsule/capsule-agents/catalog/base",
+  "uid": 0,
+  "gid": 0,
+  "caps": 0,
+  "fd": -1,
+  "abs_path": "/capsule/capsule-agents/catalog/base/.venv/lib/python3.9/site-packages/langchain_core/_api/__init__.py",
+  "resource_type": "FILE",
+  "operation": "STAT",
+  "perm_bits": null,
+  "byte_count": null,
+  "net": null,
+  "latency_us": 47,
+  "risk_tags": [],
+  "high_level_kind": "FileMetadata"
+}
+```
 
-The programme today traces a target with strace and writes raw syscall events. We are upgrading it to enrich each event with process-context metadata, roll multiple enriched events into higher-level actions, write both streams in tamper-evident JSONL, and finally emit an allow-list profile. We will do this in six incremental steps so that every stage stays independent and can survive a later switch from strace to eBPF.
+This schema gives every downstream stage enough semantic signal to:
 
-Action vocabulary
-Sliding-window aggregator
-Context enricher
-Separate writers for events and actions
-Profile generator
-Structured-concurrency wiring
+- build human-readable timelines,
+- collapse correlated calls into Actions,
+- auto-derive a least-privilege seccomp profile, and
+- flag dangerous behaviour in real time—while staying small, immutable and friendly to our all-async pipeline.
 
-Enrichment
-The enricher sits between the parser and the aggregator. For every `SyscallEvent` it gathers extra facts—PID, parent PID, µs timestamp, executable path, current working directory, original argv, uid/gid/cap set, fd→path, socket endpoints, return code and byte count, namespace or cgroup IDs, mmap regions, signals, exit status and resource usage. Each fact adds clarity: who spawned the call, where data went, what privileges were active, whether the call succeeded, and how the process mutated its environment. The enricher resolves anything strace already prints (`-yy` gives fd paths) and fills the gaps by reading `/proc/<pid>/...`. Look-ups are memoised with a short TTL to avoid hammering the filesystem. Expensive calls (readlink, getsockname) are throttled with a bounded semaphore so enrichment never blocks the parse loop.
-
-Modularity for a future eBPF tracer
-Nothing downstream of the enricher depends on how the raw event arrived. The tracer task is the only piece that will be swapped. Keep the event schema stable, expose a single async channel, and guard tracer-specific fields behind optional structs so eBPF can later push richer data without breaking the pipe.
-
-Multithreading model
-One Tokio task runs strace and pushes stderr into a bounded channel. The parser task reads that channel and produces `SyscallEvent`s. The enricher task consumes events, does its cached `/proc` look-ups under a small semaphore, and publishes enriched events. The aggregator task merges them into actions on its own channel. Two writer tasks independently dump events and actions to disk and broadcast them for live tailers. A profile task waits for the tracer to finish, then scans the completed action log and writes the YAML allow-list. All tasks live in a `JoinSet` protected by a cancellation token so that failure or completion of the tracer cleanly tears everything down in order.
-
-This structure keeps I/O, enrichment, aggregation, and persistence isolated, scales across cores, and positions us to drop in an eBPF-based tracer later with minimal refactor.
+Let's Execute this in testable PIECES, and commit each one.
+After each piece of this is added, tell me to verify, once verified
+give a commit message.

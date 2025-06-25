@@ -30,7 +30,7 @@ pub enum Cmd {
     ///   capsule tail enriched
     ///   capsule tail actions
     Tail {
-        #[arg(value_parser = ["syscalls", "events", "enriched", "actions"])]
+        #[arg(value_parser = ["syscalls", "events", "enriched", "actions", "risks"])]
         stream: String,
         #[arg(long, help = "UUID of run to tail (default: latest)")]
         run: Option<String>,

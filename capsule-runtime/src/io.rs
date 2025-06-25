@@ -183,6 +183,38 @@ async fn action_writer_task(
     Ok(())
 }
 
+/// Risk log writer task - filters events with non-empty risk_tags
+async fn risk_writer_task(
+    mut rx_enriched: Receiver<SyscallEvent>,
+    log_path: PathBuf,
+    broadcast_tx: Option<Sender<String>>,
+) -> Result<()> {
+    let mut writer = LogWriter::new(log_path, broadcast_tx).await?;
+    
+    // Write session header
+    let header = serde_json::json!({
+        "start": Utc::now().to_rfc3339(),
+        "session": Uuid::new_v4(),
+        "stream": "risks"
+    }).to_string();
+    writer.write_entry(&header).await?;
+
+    loop {
+        match rx_enriched.recv().await {
+            Ok(event) => {
+                // Only log events that have risk tags
+                if !event.risk_tags.is_empty() {
+                    let line = serde_json::to_string(&event)?;
+                    writer.write_entry(&line).await?;
+                }
+            },
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+        }
+    }
+    Ok(())
+}
+
 /// Spawn separate log writer tasks for each stream
 pub async fn logger(
     rx_raw: Receiver<String>,
@@ -199,6 +231,10 @@ pub async fn logger(
     let (evt_tail_tx, _) = tokio::sync::broadcast::channel::<String>(1024);
     let (enriched_tail_tx, _) = tokio::sync::broadcast::channel::<String>(1024);
     let (act_tail_tx, _) = tokio::sync::broadcast::channel::<String>(1024);
+    let (risk_tail_tx, _) = tokio::sync::broadcast::channel::<String>(1024);
+    
+    // Clone enriched receiver for risk writer
+    let rx_enriched_for_risk = rx_enriched.resubscribe();
     
     // Spawn independent writer tasks
     let raw_task = tokio::spawn(raw_writer_task(
@@ -215,8 +251,14 @@ pub async fn logger(
     
     let enriched_task = tokio::spawn(enriched_writer_task(
         rx_enriched,
-        log_dir.join("enriched.jsonl"),
+        log_dir.join(ENRICHED_FILE),
         Some(enriched_tail_tx),
+    ));
+    
+    let risk_task = tokio::spawn(risk_writer_task(
+        rx_enriched_for_risk,
+        log_dir.join(RISK_FILE),
+        Some(risk_tail_tx),
     ));
     
     let act_task = tokio::spawn(action_writer_task(
@@ -226,7 +268,7 @@ pub async fn logger(
     ));
     
     // Wait for all writer tasks to complete
-    let _ = tokio::try_join!(raw_task, evt_task, enriched_task, act_task)?;
+    let _ = tokio::try_join!(raw_task, evt_task, enriched_task, risk_task, act_task)?;
     Ok(())
 }
 

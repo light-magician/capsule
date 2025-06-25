@@ -1,4 +1,5 @@
 use crate::model::{SyscallEvent, Operation, ResourceType, NetworkInfo};
+use crate::risk;
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::fs::OpenOptions;
@@ -155,6 +156,10 @@ fn parse_line(line: &str) -> Option<SyscallEvent> {
     // Parse network information for socket syscalls
     let net_info = parse_network_info(&syscall_name, clean_line, &resource_type);
     
+    // Analyze security risks and categorize behavior
+    let risk_tags = risk::analyze_risk_tags(&syscall_name, abs_path.as_ref(), &operation, &resource_type, &args, retval);
+    let high_level_kind = risk::categorize_high_level_kind(&syscall_name, &operation, &resource_type);
+    
     unsafe {
         if DEBUG_COUNT <= 10 {
             eprintln!("DEBUG: Extracted: ts={}, pid={}, tid={:?}, call={}, retval={}", 
@@ -188,8 +193,8 @@ fn parse_line(line: &str) -> Option<SyscallEvent> {
         byte_count,
         latency_us: None,
         net: net_info,
-        risk_tags: Vec::new(),
-        high_level_kind: None,
+        risk_tags,
+        high_level_kind,
         
         // Legacy compatibility
         enrichment: None,

@@ -24,6 +24,7 @@ pub fn tail(stream: &str, run_uuid: Option<String>) -> Result<()> {
         "events" => EVENT_FILE,
         "enriched" => ENRICHED_FILE,
         "actions" => ACTION_FILE,
+        "risks" => RISK_FILE,
         _ => anyhow::bail!("unknown stream {stream}"),
     };
     let file_path = log_dir.join(filename);

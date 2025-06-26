@@ -148,3 +148,6 @@ Thumbs.db
 # ───────────────────────────────────────────────────────────────
 **/changes.diff     # summary diffs
 **/cmd_traces/      # command‐trace logs
+
+# CLAUDE file 
+##/CLAUDE.md

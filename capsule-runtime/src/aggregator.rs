@@ -68,7 +68,7 @@ pub async fn run_with_cancellation(
             
             // Graceful shutdown signal
             _ = cancellation_token.cancelled() => {
-                println!("Aggregator received cancellation, flushing pending actions...");
+                // Aggregator received cancellation, flushing pending actions
                 break;
             }
         }

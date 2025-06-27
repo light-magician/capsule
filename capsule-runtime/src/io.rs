@@ -99,25 +99,23 @@ async fn event_writer_task(
         "stream": "syscall_events"
     }).to_string();
     writer.write_entry(&header).await?;
-    eprintln!("DEBUG: Event writer started, wrote header");
+    // Event writer started
 
     let mut event_count = 0;
     loop {
         match rx_evt.recv().await {
             Ok(event) => {
                 event_count += 1;
-                if event_count <= 5 {
-                    eprintln!("DEBUG: Event writer received event #{}: {} (pid={})", event_count, event.call, event.pid);
-                }
+                // Event received
                 let line = serde_json::to_string(&event)?;
                 writer.write_entry(&line).await?;
             },
             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                eprintln!("DEBUG: Event writer closed. Total events written: {}", event_count);
+                // Event writer closed
                 break;
             },
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                eprintln!("DEBUG: Event writer lagged {} messages", n);
+                // Event writer lagged
                 continue;
             },
         }

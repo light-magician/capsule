@@ -35,19 +35,15 @@ pub async fn run_with_cancellation(
                 match recv_result {
                     Ok(line) => {
                         line_count += 1;
-                        if line_count % 100 == 0 {
-                            eprintln!("DEBUG: Parser received {} lines, produced {} events", line_count, event_count);
-                        }
+                        // Progress tracking (silent)
                         
                         match parse_line(&line) {
                             Some(evt) => {
                                 event_count += 1;
-                                if event_count <= 5 {
-                                    eprintln!("DEBUG: Parser produced event #{}: {} (pid={})", event_count, evt.call, evt.pid);
-                                }
+                                // Event produced
                                 // Ignore lagged receivers; only producers enforce back-pressure.
-                                if let Err(e) = tx_evt.send(evt) {
-                                    eprintln!("DEBUG: Failed to send event: {}", e);
+                                if let Err(_) = tx_evt.send(evt) {
+                                    // Failed to send event
                                 }
                             },
                             None => {
@@ -58,31 +54,25 @@ pub async fn run_with_cancellation(
                                     parse_error_count += 1;
                                     log_parse_error(&error_log, line_count, &line).await;
                                     
-                                    if parse_error_count <= 3 {
-                                        eprintln!("DEBUG: Failed to parse line #{}: '{}'", line_count, 
-                                                 if line.len() > 100 { &line[..100] } else { &line });
-                                    }
+                                    // Failed to parse line (logged to file)
                                 }
                             }
                         }
                     }
                     // Channel closed → upstream tracer exited; time to shut down.
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        eprintln!("DEBUG: Parser channel closed. Total: {} lines → {} events, {} parse errors", 
-                                 line_count, event_count, parse_error_count);
+                        // Parser channel closed
                         break;
                     },
                     // We fell behind the ring buffer; skip and continue.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        eprintln!("DEBUG: Parser lagged {} messages", n);
+                        // Parser lagged messages
                         continue;
                     },
                 }
             },
             _ = cancellation_token.cancelled() => {
-                println!("Parser received cancellation, shutting down...");
-                eprintln!("DEBUG: Parser final stats: {} lines → {} events, {} parse errors", 
-                         line_count, event_count, parse_error_count);
+                // Parser received cancellation, shutting down
                 break;
             }
         }
@@ -139,9 +129,7 @@ fn parse_line(line: &str) -> Option<SyscallEvent> {
     
     unsafe {
         DEBUG_COUNT += 1;
-        if DEBUG_COUNT <= 10 {
-            eprintln!("DEBUG: Parsing line #{}: '{}'", DEBUG_COUNT, clean_line);
-        }
+        // Debug parsing (silent)
     }
     
     // Extract all strace data - enhanced parsing
@@ -161,10 +149,7 @@ fn parse_line(line: &str) -> Option<SyscallEvent> {
     let high_level_kind = risk::categorize_high_level_kind(&syscall_name, &operation, &resource_type);
     
     unsafe {
-        if DEBUG_COUNT <= 10 {
-            eprintln!("DEBUG: Extracted: ts={}, pid={}, tid={:?}, call={}, retval={}", 
-                     timestamp, pid, tid, syscall_name, retval);
-        }
+        // Debug extraction (silent)
     }
     
     Some(SyscallEvent {

@@ -105,7 +105,6 @@ async fn run_transient(program: String, args: Vec<String>) -> Result<()> {
     let cancellation_token_ctrlc = cancellation_token.clone();
     tokio::spawn(async move {
         if let Ok(()) = tokio::signal::ctrl_c().await {
-            println!("\nReceived Ctrl+C, initiating graceful shutdown...");
             cancellation_token_ctrlc.cancel();
         }
     });
@@ -115,7 +114,6 @@ async fn run_transient(program: String, args: Vec<String>) -> Result<()> {
 
     // When tracer completes (program exit or error), initiate graceful shutdown
     if !cancellation_token.is_cancelled() {
-        println!("Tracer completed, initiating graceful shutdown...");
         cancellation_token.cancel();
     }
 
@@ -126,9 +124,8 @@ async fn run_transient(program: String, args: Vec<String>) -> Result<()> {
     ).await;
 
     match shutdown_result {
-        Ok(_) => println!("All tasks shut down gracefully"),
+        Ok(_) => {},
         Err(_) => {
-            println!("Shutdown timeout reached, aborting remaining tasks");
             task_set.abort_all();
         }
     }
@@ -143,8 +140,8 @@ async fn shutdown_tasks_gracefully(task_set: &mut JoinSet<Result<()>>) -> Result
     while let Some(result) = task_set.join_next().await {
         match result {
             Ok(Ok(())) => {}, // Task completed successfully
-            Ok(Err(e)) => eprintln!("Task error during shutdown: {}", e),
-            Err(e) => eprintln!("Task panic during shutdown: {}", e),
+            Ok(Err(_)) => {},
+            Err(_) => {},
         }
     }
     Ok(())
@@ -216,7 +213,6 @@ async fn run_logger_with_cancellation(
             run_dir
         ) => result,
         _ = cancellation_token.cancelled() => {
-            println!("Logger shutting down gracefully...");
             // Note: LogWriter tasks should flush their buffers here
             Ok(())
         }

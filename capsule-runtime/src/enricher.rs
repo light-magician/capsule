@@ -59,14 +59,13 @@ impl Enricher {
                             // Enrich the event with process context directly in SyscallEvent fields
                             match self.get_process_context(event.pid).await {
                                 Ok(context) => {
-                                    eprintln!("DEBUG: Enricher successfully got context for PID {}: exe={:?}, uid={:?}", 
-                                             event.pid, context.exe_path, context.uid);
+                                    // Got context for PID
                                     self.populate_event_fields(&mut event, &context);
                                     // Keep legacy field for backward compatibility during transition
                                     event.enrichment = Some(context);
                                 },
                                 Err(e) => {
-                                    eprintln!("DEBUG: Enricher failed to get context for PID {}: {}", event.pid, e);
+                                    // Failed to get context for PID
                                 }
                             }
                             let _ = tx_enriched.send(event);
@@ -82,7 +81,7 @@ impl Enricher {
                 
                 // Graceful shutdown signal
                 _ = cancellation_token.cancelled() => {
-                    println!("Enricher received cancellation, cleaning up cache...");
+                    // Enricher received cancellation, cleaning up cache
                     self.cache.clear();
                     break;
                 }

@@ -48,10 +48,7 @@ pub async fn run_with_cancellation(
     let stderr = child.stderr.take().unwrap();
     let mut rdr = BufReader::new(stderr).lines();
 
-    println!(
-        "Started tracing process {} with strace",
-        child_id.unwrap_or(0)
-    );
+    // Started tracing process with strace
 
     tokio::select! {
         // Read strace lines
@@ -63,14 +60,13 @@ pub async fn run_with_cancellation(
             }
             Ok::<(), anyhow::Error>(())
         } => {
-            if let Err(e) = result {
-                eprintln!("Error reading strace output: {}", e);
+            if let Err(_) = result {
+                // Error reading strace output
             }
         },
 
         // Handle cancellation
         _ = cancellation_token.cancelled() => {
-            println!("Received cancellation signal, terminating traced process...");
             if let Some(pid) = child.id() {
                 // Kill the entire process group
                 let _ = kill_process_group(pid).await;
@@ -82,8 +78,7 @@ pub async fn run_with_cancellation(
     }
 
     // Ensure child is terminated
-    let exit_status = child.wait().await?;
-    println!("Traced process exited with status: {:?}", exit_status);
+    let _exit_status = child.wait().await?;
 
     Ok(())
 }
@@ -91,7 +86,7 @@ pub async fn run_with_cancellation(
 async fn kill_process_group(pid: u32) -> Result<()> {
     use tokio::process::Command;
 
-    println!("Terminating process group for PID {}", pid);
+    // Terminating process group
     
     // First, try to kill child processes nicely
     let _ = Command::new("pkill")
@@ -119,7 +114,7 @@ async fn kill_process_group(pid: u32) -> Result<()> {
         .output()
         .await;
     
-    println!("Sent termination signals to process group {}", pid);
+    // Sent termination signals to process group
 
     Ok(())
 }

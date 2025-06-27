@@ -149,5 +149,6 @@ Thumbs.db
 **/changes.diff     # summary diffs
 **/cmd_traces/      # command‐trace logs
 
-# CLAUDE file 
-##/CLAUDE.md
+# CLAUDE files 
+**/CLAUDE.md
+**/MVP_ROADMAP.md

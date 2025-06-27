@@ -6,10 +6,21 @@ FROM rust:1.80-slim-bullseye
 #           lsof
 #           libseccomp-dev
 #           strace
+#           curl (for Node.js install)
+#           ca-certificates (for HTTPS)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        python3 python3-venv python3-pip libseccomp-dev lsof strace && \
+        python3 python3-venv python3-pip libseccomp-dev lsof strace \
+        curl ca-certificates && \
     rm -rf /var/lib/apt/lists/*
+
+# ----------- INSTALL NODE.JS 20.x LTS ---------------------
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# ----------- INSTALL CLAUDE CODE CLI ----------------------
+RUN npm install -g @anthropic-ai/claude-code
 
 WORKDIR /capsule
 COPY capsule-runtime/ ./capsule-runtime

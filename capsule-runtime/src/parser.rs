@@ -162,6 +162,7 @@ fn parse_line(line: &str) -> Option<SyscallEvent> {
         ppid: None,
         exe_path: None,
         cwd: None,
+        argv: None,
         uid: None,
         gid: None,
         euid: None,
@@ -169,6 +170,7 @@ fn parse_line(line: &str) -> Option<SyscallEvent> {
         caps: None,
         fd: semantic_data.fd,
         abs_path: semantic_data.abs_path,
+        fd_map: std::collections::HashMap::new(),
         resource_type,
         operation,
         perm_bits: semantic_data.perm_bits,
@@ -178,8 +180,6 @@ fn parse_line(line: &str) -> Option<SyscallEvent> {
         risk_tags,
         high_level_kind,
 
-        // Legacy compatibility
-        enrichment: None,
     })
 }
 

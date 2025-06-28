@@ -44,8 +44,6 @@ impl Enricher {
                             // Enrich the event with process context
                             if let Some(context) = self.get_process_context(event.pid).await {
                                 self.populate_event_fields(&mut event, &context);
-                                // Keep legacy field for backward compatibility
-                                event.enrichment = Some(context);
                             }
                             let _ = tx_enriched.send(event);
                         },
@@ -66,20 +64,20 @@ impl Enricher {
 
     /// Populate SyscallEvent fields directly from ProcessContext
     fn populate_event_fields(&self, event: &mut SyscallEvent, context: &ProcessContext) {
-        // Convert ProcessContext data to EnhancedEvent fields
+        // Convert ProcessContext data to SyscallEvent fields
         event.ppid = context.ppid;
         event.exe_path = context.exe_path.as_ref().map(|p| p.to_string_lossy().to_string());
         event.cwd = context.cwd.as_ref().map(|p| p.to_string_lossy().to_string());
+        event.argv = context.argv.clone();
         event.uid = context.uid;
         event.gid = context.gid;
         event.euid = context.euid;
         event.egid = context.egid;
+        event.fd_map = context.fd_map.clone();
         
         // Parse capabilities from hex string to u64 bitmap
         event.caps = context.capabilities.as_ref()
             .and_then(|cap_str| u64::from_str_radix(cap_str, 16).ok());
-        
-        // Note: fd mapping and namespace info is in legacy ProcessContext for now
     }
 
     /// Get process context for a PID, using simple cache

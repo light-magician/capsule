@@ -28,6 +28,8 @@ pub struct SyscallEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,        // current working directory
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub argv: Option<Vec<String>>,  // command line arguments
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub uid: Option<u32>,           // real UID
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gid: Option<u32>,           // real GID
@@ -45,6 +47,8 @@ pub struct SyscallEvent {
     pub fd: Option<i32>,            // FD number referenced (-1 if none)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub abs_path: Option<String>,   // resolved absolute path
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
+    pub fd_map: HashMap<i32, String>, // fd -> path/socket description  
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_type: Option<ResourceType>,  // high-level resource kind
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -68,9 +72,6 @@ pub struct SyscallEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub high_level_kind: Option<String>,  // bucket used by Aggregator
     
-    // Legacy compatibility field - TODO: Remove after transition
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enrichment: Option<ProcessContext>,
 }
 
 /// Resource type classification

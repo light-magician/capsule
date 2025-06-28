@@ -6,6 +6,7 @@ mod semantic;
 mod strace;
 
 use crate::model::SyscallEvent;
+use crate::pipeline::{AsyncPipeline, RunOptions, signal_ready};
 use crate::risk;
 use anyhow::Result;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -18,6 +19,30 @@ use tokio_util::sync::CancellationToken;
 
 /// Parse counter for monitoring (replaces unsafe static)
 static PARSE_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+/// Parser component that implements the AsyncPipeline trait
+pub struct Parser;
+
+impl AsyncPipeline for Parser {
+    type Input = Receiver<String>;
+    type Output = Sender<SyscallEvent>;
+    
+    async fn run(self, input: Self::Input, output: Self::Output) -> Result<()> {
+        run_with_cancellation(input, output, CancellationToken::new()).await
+    }
+    
+    async fn run_with_options(
+        self,
+        input: Self::Input,
+        output: Self::Output,
+        options: RunOptions,
+    ) -> Result<()> {
+        signal_ready(&options.ready_tx).await;
+        
+        let cancellation_token = options.cancellation_token.unwrap_or_else(CancellationToken::new);
+        run_with_cancellation(input, output, cancellation_token).await
+    }
+}
 
 /// Public entry: consumes raw strace lines, emits typed events.
 pub async fn run(mut rx: Receiver<String>, tx_evt: Sender<SyscallEvent>) -> Result<()> {

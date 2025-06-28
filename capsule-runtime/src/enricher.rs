@@ -3,32 +3,19 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 use tokio::sync::broadcast::{Receiver, Sender};
-use tokio::sync::{mpsc, Semaphore};
-use tokio::time;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-
-/// Cache entry for process context data
-#[derive(Debug, Clone)]
-struct CacheEntry {
-    context: ProcessContext,
-    expires_at: Instant,
-}
 
 /// Context enricher that adds /proc metadata to syscall events
 pub struct Enricher {
-    cache: HashMap<u32, CacheEntry>,
-    cache_ttl: Duration,
-    lookup_semaphore: Semaphore,
+    cache: HashMap<u32, ProcessContext>,
 }
 
 impl Enricher {
     pub fn new() -> Self {
         Self {
             cache: HashMap::new(),
-            cache_ttl: Duration::from_secs(5), // 5 second TTL
-            lookup_semaphore: Semaphore::new(10), // Limit concurrent /proc lookups
         }
     }
 
@@ -48,25 +35,17 @@ impl Enricher {
         tx_enriched: Sender<SyscallEvent>,
         cancellation_token: CancellationToken,
     ) -> Result<()> {
-        let mut cleanup_interval = time::interval(Duration::from_secs(10));
-
         loop {
             tokio::select! {
                 // Process incoming events
                 event_result = rx_evt.recv() => {
                     match event_result {
                         Ok(mut event) => {
-                            // Enrich the event with process context directly in SyscallEvent fields
-                            match self.get_process_context(event.pid).await {
-                                Ok(context) => {
-                                    // Got context for PID
-                                    self.populate_event_fields(&mut event, &context);
-                                    // Keep legacy field for backward compatibility during transition
-                                    event.enrichment = Some(context);
-                                },
-                                Err(e) => {
-                                    // Failed to get context for PID
-                                }
+                            // Enrich the event with process context
+                            if let Some(context) = self.get_process_context(event.pid).await {
+                                self.populate_event_fields(&mut event, &context);
+                                // Keep legacy field for backward compatibility
+                                event.enrichment = Some(context);
                             }
                             let _ = tx_enriched.send(event);
                         },
@@ -74,14 +53,8 @@ impl Enricher {
                     }
                 },
                 
-                // Periodic cache cleanup
-                _ = cleanup_interval.tick() => {
-                    self.cleanup_expired_entries();
-                },
-                
                 // Graceful shutdown signal
                 _ = cancellation_token.cancelled() => {
-                    // Enricher received cancellation, cleaning up cache
                     self.cache.clear();
                     break;
                 }
@@ -109,42 +82,33 @@ impl Enricher {
         // Note: fd mapping and namespace info is in legacy ProcessContext for now
     }
 
-    /// Get process context for a PID, using cache when available
-    async fn get_process_context(&mut self, pid: u32) -> Result<ProcessContext> {
-        let now = Instant::now();
-        
+    /// Get process context for a PID, using simple cache
+    async fn get_process_context(&mut self, pid: u32) -> Option<ProcessContext> {
         // Check cache first
-        if let Some(entry) = self.cache.get(&pid) {
-            if now < entry.expires_at {
-                return Ok(entry.context.clone());
-            }
+        if let Some(context) = self.cache.get(&pid) {
+            return Some(context.clone());
         }
 
-        // Cache miss or expired - fetch from /proc
-        let _permit = self.lookup_semaphore.acquire().await?;
-        let context = self.fetch_process_context(pid).await?;
-        
-        // Update cache
-        self.cache.insert(pid, CacheEntry {
-            context: context.clone(),
-            expires_at: now + self.cache_ttl,
-        });
-        
-        Ok(context)
+        // Cache miss - fetch from /proc
+        if let Ok(context) = self.fetch_process_context(pid).await {
+            // Update cache (no TTL, processes don't change much during tracing)
+            self.cache.insert(pid, context.clone());
+            Some(context)
+        } else {
+            None
+        }
     }
 
-    /// Fetch process context from /proc filesystem
+    /// Fetch process context from /proc filesystem - simplified, no concurrency
     async fn fetch_process_context(&self, pid: u32) -> Result<ProcessContext> {
-        let proc_path = format!("/proc/{}", pid);
-        
-        // Read various /proc files concurrently
-        let exe_path = self.read_exe_path(pid).await;
-        let cwd = self.read_cwd(pid).await;
-        let argv = self.read_cmdline(pid).await;
-        let (uid, gid, euid, egid, ppid) = self.read_status(pid).await;
-        let fd_map = self.read_fd_map(pid).await;
-        let capabilities = self.read_capabilities(pid).await;
-        let namespaces = self.read_namespaces(pid).await;
+        // Read /proc files sequentially (simpler than managing concurrent futures)
+        let exe_path = self.read_exe_path(pid);
+        let cwd = self.read_cwd(pid);
+        let argv = self.read_cmdline(pid);
+        let (uid, gid, euid, egid, ppid) = self.read_status(pid);
+        let fd_map = self.read_fd_map(pid);
+        let capabilities = self.read_capabilities(pid);
+        let namespaces = self.read_namespaces(pid);
 
         Ok(ProcessContext {
             exe_path,
@@ -162,19 +126,19 @@ impl Enricher {
     }
 
     /// Read executable path from /proc/pid/exe
-    async fn read_exe_path(&self, pid: u32) -> Option<PathBuf> {
+    fn read_exe_path(&self, pid: u32) -> Option<PathBuf> {
         let exe_link = format!("/proc/{}/exe", pid);
         fs::read_link(&exe_link).ok()
     }
 
     /// Read current working directory from /proc/pid/cwd
-    async fn read_cwd(&self, pid: u32) -> Option<PathBuf> {
+    fn read_cwd(&self, pid: u32) -> Option<PathBuf> {
         let cwd_link = format!("/proc/{}/cwd", pid);
         fs::read_link(&cwd_link).ok()
     }
 
     /// Read command line arguments from /proc/pid/cmdline
-    async fn read_cmdline(&self, pid: u32) -> Option<Vec<String>> {
+    fn read_cmdline(&self, pid: u32) -> Option<Vec<String>> {
         let cmdline_path = format!("/proc/{}/cmdline", pid);
         let content = fs::read_to_string(&cmdline_path).ok()?;
         
@@ -197,7 +161,7 @@ impl Enricher {
     }
 
     /// Read UID, GID, EUID, EGID, and PPID from /proc/pid/status
-    async fn read_status(&self, pid: u32) -> (Option<u32>, Option<u32>, Option<u32>, Option<u32>, Option<u32>) {
+    fn read_status(&self, pid: u32) -> (Option<u32>, Option<u32>, Option<u32>, Option<u32>, Option<u32>) {
         let status_path = format!("/proc/{}/status", pid);
         let content = match fs::read_to_string(&status_path) {
             Ok(c) => c,
@@ -238,7 +202,7 @@ impl Enricher {
     }
 
     /// Read file descriptor mappings from /proc/pid/fd/
-    async fn read_fd_map(&self, pid: u32) -> HashMap<i32, String> {
+    fn read_fd_map(&self, pid: u32) -> HashMap<i32, String> {
         let fd_dir = format!("/proc/{}/fd", pid);
         let mut fd_map = HashMap::new();
 
@@ -258,7 +222,7 @@ impl Enricher {
     }
 
     /// Read process capabilities from /proc/pid/status
-    async fn read_capabilities(&self, pid: u32) -> Option<String> {
+    fn read_capabilities(&self, pid: u32) -> Option<String> {
         let status_path = format!("/proc/{}/status", pid);
         let content = fs::read_to_string(&status_path).ok()?;
 
@@ -272,7 +236,7 @@ impl Enricher {
     }
 
     /// Read namespace information from /proc/pid/ns/
-    async fn read_namespaces(&self, pid: u32) -> HashMap<String, String> {
+    fn read_namespaces(&self, pid: u32) -> HashMap<String, String> {
         let ns_dir = format!("/proc/{}/ns", pid);
         let mut namespaces = HashMap::new();
 
@@ -289,11 +253,6 @@ impl Enricher {
         namespaces
     }
 
-    /// Remove expired entries from the cache
-    fn cleanup_expired_entries(&mut self) {
-        let now = Instant::now();
-        self.cache.retain(|_, entry| now < entry.expires_at);
-    }
 }
 
 /// Run enricher with ready synchronization

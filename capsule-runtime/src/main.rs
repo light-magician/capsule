@@ -5,6 +5,7 @@ mod enricher;
 mod io;
 mod model;
 mod parser;
+mod pipeline;
 mod risk;
 mod tail;
 mod trace;

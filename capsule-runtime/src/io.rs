@@ -58,159 +58,91 @@ impl LogWriter {
     }
 }
 
-/// Raw syscall log writer task
-async fn raw_writer_task(
-    mut rx_raw: Receiver<String>,
+/// Generic log writer task that handles any serializable type with optional filtering
+async fn generic_writer_task<T>(
+    mut rx: Receiver<T>,
     log_path: PathBuf,
+    stream_name: &str,
     broadcast_tx: Option<Sender<String>>,
-) -> Result<()> {
+    filter: Option<Box<dyn Fn(&T) -> bool + Send>>,
+) -> Result<()>
+where
+    T: serde::Serialize + Clone,
+{
     let mut writer = LogWriter::new(log_path, broadcast_tx).await?;
     
     // Write session header
     let header = serde_json::json!({
         "start": Utc::now().to_rfc3339(),
         "session": Uuid::new_v4(),
-        "stream": "raw_syscalls"
+        "stream": stream_name
     }).to_string();
     writer.write_entry(&header).await?;
 
     loop {
-        match rx_raw.recv().await {
-            Ok(line) => writer.write_entry(&line).await?,
+        match rx.recv().await {
+            Ok(item) => {
+                // Apply filter if provided
+                if let Some(ref filter_fn) = filter {
+                    if !filter_fn(&item) {
+                        continue;
+                    }
+                }
+                
+                let line = serde_json::to_string(&item)?;
+                writer.write_entry(&line).await?;
+            },
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
         }
     }
     Ok(())
+}
+
+/// Raw syscall log writer task
+async fn raw_writer_task(
+    rx_raw: Receiver<String>,
+    log_path: PathBuf,
+    broadcast_tx: Option<Sender<String>>,
+) -> Result<()> {
+    generic_writer_task(rx_raw, log_path, "raw_syscalls", broadcast_tx, None).await
 }
 
 /// Event log writer task
 async fn event_writer_task(
-    mut rx_evt: Receiver<SyscallEvent>,
+    rx_evt: Receiver<SyscallEvent>,
     log_path: PathBuf,
     broadcast_tx: Option<Sender<String>>,
 ) -> Result<()> {
-    let mut writer = LogWriter::new(log_path, broadcast_tx).await?;
-    
-    // Write session header
-    let header = serde_json::json!({
-        "start": Utc::now().to_rfc3339(),
-        "session": Uuid::new_v4(),
-        "stream": "syscall_events"
-    }).to_string();
-    writer.write_entry(&header).await?;
-    // Event writer started
-
-    let mut event_count = 0;
-    loop {
-        match rx_evt.recv().await {
-            Ok(event) => {
-                event_count += 1;
-                // Event received
-                let line = serde_json::to_string(&event)?;
-                writer.write_entry(&line).await?;
-            },
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                // Event writer closed
-                break;
-            },
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                // Event writer lagged
-                continue;
-            },
-        }
-    }
-    Ok(())
+    generic_writer_task(rx_evt, log_path, "syscall_events", broadcast_tx, None).await
 }
 
 /// Enriched event log writer task
 async fn enriched_writer_task(
-    mut rx_enriched: Receiver<SyscallEvent>,
+    rx_enriched: Receiver<SyscallEvent>,
     log_path: PathBuf,
     broadcast_tx: Option<Sender<String>>,
 ) -> Result<()> {
-    let mut writer = LogWriter::new(log_path, broadcast_tx).await?;
-    
-    // Write session header
-    let header = serde_json::json!({
-        "start": Utc::now().to_rfc3339(),
-        "session": Uuid::new_v4(),
-        "stream": "enriched_events"
-    }).to_string();
-    writer.write_entry(&header).await?;
-
-    loop {
-        match rx_enriched.recv().await {
-            Ok(event) => {
-                let line = serde_json::to_string(&event)?;
-                writer.write_entry(&line).await?;
-            },
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-        }
-    }
-    Ok(())
+    generic_writer_task(rx_enriched, log_path, "enriched_events", broadcast_tx, None).await
 }
 
 /// Action log writer task
 async fn action_writer_task(
-    mut rx_act: Receiver<Action>,
+    rx_act: Receiver<Action>,
     log_path: PathBuf,
     broadcast_tx: Option<Sender<String>>,
 ) -> Result<()> {
-    let mut writer = LogWriter::new(log_path, broadcast_tx).await?;
-    
-    // Write session header
-    let header = serde_json::json!({
-        "start": Utc::now().to_rfc3339(),
-        "session": Uuid::new_v4(),
-        "stream": "actions"
-    }).to_string();
-    writer.write_entry(&header).await?;
-
-    loop {
-        match rx_act.recv().await {
-            Ok(action) => {
-                let line = serde_json::to_string(&action)?;
-                writer.write_entry(&line).await?;
-            },
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-        }
-    }
-    Ok(())
+    generic_writer_task(rx_act, log_path, "actions", broadcast_tx, None).await
 }
 
 /// Risk log writer task - filters events with non-empty risk_tags
 async fn risk_writer_task(
-    mut rx_enriched: Receiver<SyscallEvent>,
+    rx_enriched: Receiver<SyscallEvent>,
     log_path: PathBuf,
     broadcast_tx: Option<Sender<String>>,
 ) -> Result<()> {
-    let mut writer = LogWriter::new(log_path, broadcast_tx).await?;
-    
-    // Write session header
-    let header = serde_json::json!({
-        "start": Utc::now().to_rfc3339(),
-        "session": Uuid::new_v4(),
-        "stream": "risks"
-    }).to_string();
-    writer.write_entry(&header).await?;
-
-    loop {
-        match rx_enriched.recv().await {
-            Ok(event) => {
-                // Only log events that have risk tags
-                if !event.risk_tags.is_empty() {
-                    let line = serde_json::to_string(&event)?;
-                    writer.write_entry(&line).await?;
-                }
-            },
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-        }
-    }
-    Ok(())
+    let filter = Box::new(|event: &SyscallEvent| !event.risk_tags.is_empty());
+    generic_writer_task(rx_enriched, log_path, "risks", broadcast_tx, Some(filter)).await
 }
 
 /// Spawn separate log writer tasks for each stream

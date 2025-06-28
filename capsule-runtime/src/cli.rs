@@ -12,7 +12,7 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Cmd {
     /// Run a program with syscall tracing and logging (foreground mode).
-    /// 
+    ///
     /// Examples:
     ///   capsule run python3 server.py
     ///   capsule run node app.js
@@ -23,7 +23,7 @@ pub enum Cmd {
         args: Vec<String>,
     },
     /// Tail a log stream from a run (live following).
-    /// 
+    ///
     /// Examples:
     ///   capsule tail syscalls
     ///   capsule tail events --run abc123

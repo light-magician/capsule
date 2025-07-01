@@ -33,3 +33,27 @@ These gaps create critical attack vectors—arbitrary code execution, covert dat
 - **Unified Tooling**: The same `capsule run` CLI and `@capsule.tool` Python decorator handle policy enforcement, sandbox setup, execution, logging and verification—no scattered scripts.
 
 _Compared to stitching together Dockerfiles, custom AppArmor profiles, and ad‑hoc loggers, Capsule offers a consolidated, end‑to‑end security architecture that’s easier to reason about, lighter to maintain, and stronger against kernel‑level exploits._
+
+## Development Environment
+
+### Supabase Database Dashboard
+
+For development and testing, the integration environment includes a Supabase instance with a web-based SQL editor and AI-powered query capabilities:
+
+**Access:** http://localhost:8000 (when running `docker-compose up` in the `integration/` directory)
+
+**Features:**
+- **AI SQL Editor**: Ask natural language questions like "show me all network events from the most recent run"
+- **Table Browser**: View and edit database tables
+- **Real-time Data**: Live updates as `capsule send` commands populate the database
+- **Query History**: Save and organize frequently used queries
+
+**Quick Start:**
+```bash
+cd integration/
+docker-compose up -d
+# Access dashboard at http://localhost:8000
+```
+
+This provides a powerful interface for analyzing Capsule run data, debugging agent behavior, and creating custom reports without writing complex SQL queries.
+EOF < /dev/null

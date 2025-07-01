@@ -35,4 +35,18 @@ pub enum Cmd {
         #[arg(long, help = "UUID of run to tail (default: latest)")]
         run: Option<String>,
     },
+    /// Show the UUID of the most recent run.
+    ///
+    /// Examples:
+    ///   capsule last
+    Last,
+    /// List all run UUIDs in chronological order (most recent first).
+    ///
+    /// Examples:
+    ///   capsule list
+    ///   capsule list --limit 10
+    List {
+        #[arg(long, help = "Maximum number of runs to show", default_value = "20")]
+        limit: usize,
+    },
 }

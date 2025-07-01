@@ -49,4 +49,13 @@ pub enum Cmd {
         #[arg(long, help = "Maximum number of runs to show", default_value = "20")]
         limit: usize,
     },
+    /// Send run data to database for analysis.
+    ///
+    /// Examples:
+    ///   capsule send                    # Send latest run
+    ///   capsule send abc123-def456...   # Send specific run
+    Send {
+        #[arg(help = "Run UUID to send (default: latest run)")]
+        run_id: Option<String>,
+    },
 }

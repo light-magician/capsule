@@ -1,6 +1,7 @@
 mod aggregator;
 mod cli;
 mod constants;
+mod database;
 mod enricher;
 mod io;
 mod model;
@@ -15,7 +16,6 @@ use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Cmd};
 use std::fs;
-use std::thread;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinSet;
@@ -32,6 +32,7 @@ async fn main() -> Result<()> {
         Cmd::Tail { stream, run } => tail::tail(&stream, run),
         Cmd::Last => runs::handle_last_command(),
         Cmd::List { limit } => runs::handle_list_command(limit),
+        Cmd::Send { run_id } => database::send_run_to_database(run_id, database::DatabaseConfig::default()).await,
     }
 }
 

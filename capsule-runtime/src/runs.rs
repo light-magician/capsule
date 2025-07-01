@@ -15,7 +15,7 @@ pub struct RunInfo {
 
 impl RunInfo {
     /// Create RunInfo from a run directory
-    fn from_run_dir(uuid: String, run_dir: &PathBuf) -> Result<Self> {
+    pub fn from_run_dir(uuid: String, run_dir: &PathBuf) -> Result<Self> {
         let log_dir_file = run_dir.join(crate::constants::LOG_DIR_FILE);
         let log_directory = if log_dir_file.exists() {
             let log_path = fs::read_to_string(&log_dir_file)
@@ -74,7 +74,7 @@ pub fn list_runs(limit: Option<usize>) -> Result<Vec<RunInfo>> {
     let mut runs = Vec::new();
     
     // Read all run directories
-    for entry in fs::read_dir(run_root)? {
+    for entry in fs::read_dir(run_root.as_path())? {
         let entry = entry?;
         let path = entry.path();
         

@@ -58,4 +58,14 @@ pub enum Cmd {
         #[arg(help = "Run UUID to send (default: latest run)")]
         run_id: Option<String>,
     },
+    /// Interactive real-time syscall dashboard with visualization.
+    ///
+    /// Examples:
+    ///   capsule dash python3 server.py  # Run with live visualization
+    ///   capsule dash ./my-binary        # Monitor binary execution
+    Dash {
+        program: String,
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+    },
 }

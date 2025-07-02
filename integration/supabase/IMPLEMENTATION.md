@@ -1,77 +1,75 @@
-//! Database operations for sending run data to Supabase.
+# Capsule Send Implementation Guide
 
-use crate::runs::*;
-use crate::model::*;
-use anyhow::Result;
-use tokio_postgres::{Client, NoTls};
+## Overview
+
+This document provides step-by-step instructions for implementing the actual database insertion logic for the `capsule send` command.
+
+## Current State
+
+✅ **Completed:**
+- Command structure (`capsule send [run_id]`)
+- Database schema (runs, syscall_events, actions tables)
+- Run discovery (`capsule last`, `capsule list`)
+- JSONL file parsing logic
+- Database connection configuration
+
+⚠️ **TODO:** Actual database insertion in `src/database.rs`
+
+## Implementation Steps
+
+### 1. Add Database Dependencies
+
+Add to `Cargo.toml`:
+```toml
+tokio-postgres = "0.7"
+postgres-types = { version = "0.2", features = ["derive", "with-chrono-0_4", "with-uuid-1", "with-serde_json-1"] }
+```
+
+### 2. Update Database Module
+
+Replace the stub in `src/database.rs` with actual implementation:
+
+```rust
+use tokio_postgres::{Client, NoTls, types::ToSql};
+use serde_json;
 use std::fs;
-use chrono::Utc;
-use uuid::Uuid;
 
-/// Database configuration
-pub struct DatabaseConfig {
-    pub connection_string: String,
-}
-
-impl Default for DatabaseConfig {
-    fn default() -> Self {
-        Self {
-            // Default to container database
-            connection_string: std::env::var("SUPABASE_DB_URL")
-                .or_else(|_| std::env::var("DATABASE_URL"))
-                .unwrap_or_else(|_| "postgresql://postgres:postgres@localhost:54322/postgres".to_string()),
-        }
-    }
-}
-
-/// Send a run's data to the database
 pub async fn send_run_to_database(run_id: Option<String>, config: DatabaseConfig) -> Result<()> {
-    // Determine which run to send
+    // 1. Determine run UUID
     let uuid = match run_id {
-        Some(id) if id == "last" => get_last_run()?.ok_or_else(|| anyhow::anyhow!("No runs found"))?,
         Some(id) => id,
         None => get_last_run()?.ok_or_else(|| anyhow::anyhow!("No runs found"))?,
     };
 
     println!("📤 Sending run {} to database...", uuid);
-    
-    // Connect to database
+
+    // 2. Connect to database
     let (client, connection) = tokio_postgres::connect(&config.connection_string, NoTls).await?;
     tokio::spawn(async move {
         if let Err(e) = connection.await {
             eprintln!("Database connection error: {}", e);
         }
     });
-    
-    // Get run metadata  
+
+    // 3. Get run metadata and insert
     let run_info = get_run_info(&uuid)?;
-    println!("  📁 Log directory: {:?}", run_info.log_directory);
-    println!("  🕐 Created: {:?}", run_info.created_at);
-    
-    // Insert run metadata
     insert_run_metadata(&client, &uuid, &run_info).await?;
     
-    // Insert log data if available
+    // 4. Insert log data
     if let Some(log_dir) = &run_info.log_directory {
         insert_log_data(&client, &uuid, log_dir).await?;
         update_run_statistics(&client, &uuid).await?;
     }
-    
+
     println!("✅ Successfully sent run {} to database", uuid);
     Ok(())
 }
+```
 
-/// Get detailed run information
-fn get_run_info(uuid: &str) -> Result<RunInfo> {
-    let run_dir = crate::constants::RUN_ROOT.join(uuid);
-    if !run_dir.exists() {
-        return Err(anyhow::anyhow!("Run directory not found: {:?}", run_dir));
-    }
+### 3. Implement Core Insert Functions
 
-    RunInfo::from_run_dir(uuid.to_string(), &run_dir)
-}
-
-/// Insert run metadata into database
+#### 3.1 Insert Run Metadata
+```rust
 async fn insert_run_metadata(client: &Client, uuid: &str, run_info: &RunInfo) -> Result<()> {
     let run_uuid = Uuid::parse_str(uuid)?;
     
@@ -91,24 +89,19 @@ async fn insert_run_metadata(client: &Client, uuid: &str, run_info: &RunInfo) ->
     client.execute(query, &[
         &run_uuid,
         &command_line,
-        &"/unknown", // working_directory - TODO: extract from logs
+        &"/unknown", // working_directory
         &run_info.created_at.unwrap_or_else(|| Utc::now()),
         &run_info.log_directory.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
-        &"unknown", // agent_type - TODO: implement detection
+        &"unknown", // agent_type - TODO: infer from command
     ]).await?;
-    
-    println!("  📊 Inserted run metadata");
+
     Ok(())
 }
+```
 
-/// Extract command from log files (stub for now)
-fn extract_command_from_logs(_run_info: &RunInfo) -> Option<String> {
-    // TODO: Parse first line of syscalls.log or events.jsonl to extract command
-    None
-}
-
-/// Insert log data from JSONL files
-async fn insert_log_data(client: &Client, run_uuid: &str, log_dir: &std::path::PathBuf) -> Result<()> {
+#### 3.2 Insert Events from JSONL
+```rust
+async fn insert_log_data(client: &Client, run_uuid: &str, log_dir: &PathBuf) -> Result<()> {
     let uuid = Uuid::parse_str(run_uuid)?;
     
     // Insert enriched events (most complete data)
@@ -126,8 +119,7 @@ async fn insert_log_data(client: &Client, run_uuid: &str, log_dir: &std::path::P
     Ok(())
 }
 
-/// Insert events from enriched JSONL file
-async fn insert_events_from_file(client: &Client, run_uuid: &Uuid, file_path: &std::path::PathBuf) -> Result<()> {
+async fn insert_events_from_file(client: &Client, run_uuid: &Uuid, file_path: &PathBuf) -> Result<()> {
     let content = fs::read_to_string(file_path)?;
     let mut count = 0;
 
@@ -136,14 +128,7 @@ async fn insert_events_from_file(client: &Client, run_uuid: &Uuid, file_path: &s
             continue; // Skip headers
         }
 
-        // Extract JSON part after Blake3 hash (format: "hash {json}")
-        let json_part = if let Some(space_pos) = line.find(' ') {
-            &line[space_pos + 1..]
-        } else {
-            line // Fallback to full line if no space found
-        };
-
-        match serde_json::from_str::<SyscallEvent>(json_part) {
+        match serde_json::from_str::<SyscallEvent>(line) {
             Ok(event) => {
                 insert_single_event(client, run_uuid, &event).await?;
                 count += 1;
@@ -155,8 +140,10 @@ async fn insert_events_from_file(client: &Client, run_uuid: &Uuid, file_path: &s
     println!("  📊 Inserted {} events from {:?}", count, file_path.file_name().unwrap_or_default());
     Ok(())
 }
+```
 
-/// Insert single syscall event
+#### 3.3 Insert Single Event
+```rust
 async fn insert_single_event(client: &Client, run_uuid: &Uuid, event: &SyscallEvent) -> Result<()> {
     let query = r#"
         INSERT INTO syscall_events (
@@ -210,9 +197,11 @@ async fn insert_single_event(client: &Client, run_uuid: &Uuid, event: &SyscallEv
 
     Ok(())
 }
+```
 
-/// Insert actions from JSONL file
-async fn insert_actions_from_file(client: &Client, run_uuid: &Uuid, file_path: &std::path::PathBuf) -> Result<()> {
+#### 3.4 Insert Actions
+```rust
+async fn insert_actions_from_file(client: &Client, run_uuid: &Uuid, file_path: &PathBuf) -> Result<()> {
     let content = fs::read_to_string(file_path)?;
     let mut count = 0;
 
@@ -221,14 +210,7 @@ async fn insert_actions_from_file(client: &Client, run_uuid: &Uuid, file_path: &
             continue;
         }
 
-        // Extract JSON part after Blake3 hash (format: "hash {json}")
-        let json_part = if let Some(space_pos) = line.find(' ') {
-            &line[space_pos + 1..]
-        } else {
-            line // Fallback to full line if no space found
-        };
-
-        match serde_json::from_str::<Action>(json_part) {
+        match serde_json::from_str::<Action>(line) {
             Ok(action) => {
                 insert_single_action(client, run_uuid, &action).await?;
                 count += 1;
@@ -241,7 +223,6 @@ async fn insert_actions_from_file(client: &Client, run_uuid: &Uuid, file_path: &
     Ok(())
 }
 
-/// Insert single action
 async fn insert_single_action(client: &Client, run_uuid: &Uuid, action: &Action) -> Result<()> {
     let pids_array: Vec<i32> = action.pids.iter().map(|&x| x as i32).collect();
     let (action_type, action_data) = action_kind_to_json(&action.kind)?;
@@ -262,33 +243,10 @@ async fn insert_single_action(client: &Client, run_uuid: &Uuid, action: &Action)
 
     Ok(())
 }
+```
 
-/// Convert ActionKind to (type_string, data_json)
-fn action_kind_to_json(kind: &ActionKind) -> Result<(String, serde_json::Value)> {
-    match kind {
-        ActionKind::FileRead { path, bytes } => Ok(("FileRead".to_string(), serde_json::json!({"path": path, "bytes": bytes}))),
-        ActionKind::FileWrite { path, bytes } => Ok(("FileWrite".to_string(), serde_json::json!({"path": path, "bytes": bytes}))),
-        ActionKind::DirectoryList { path, entries } => Ok(("DirectoryList".to_string(), serde_json::json!({"path": path, "entries": entries}))),
-        ActionKind::SocketConnect { addr, protocol } => Ok(("SocketConnect".to_string(), serde_json::json!({"addr": addr.to_string(), "protocol": protocol}))),
-        ActionKind::SocketBind { addr, protocol } => Ok(("SocketBind".to_string(), serde_json::json!({"addr": addr.to_string(), "protocol": protocol}))),
-        ActionKind::SocketAccept { local_addr, remote_addr } => Ok(("SocketAccept".to_string(), serde_json::json!({"local_addr": local_addr.to_string(), "remote_addr": remote_addr.to_string()}))),
-        ActionKind::ProcessSpawn { pid, argv, parent_pid } => Ok(("ProcessSpawn".to_string(), serde_json::json!({"pid": pid, "argv": argv, "parent_pid": parent_pid}))),
-        ActionKind::ProcessExec { argv } => Ok(("ProcessExec".to_string(), serde_json::json!({"argv": argv}))),
-        ActionKind::ProcessExit { pid, exit_code } => Ok(("ProcessExit".to_string(), serde_json::json!({"pid": pid, "exit_code": exit_code}))),
-        ActionKind::SignalSend { target_pid, signal } => Ok(("SignalSend".to_string(), serde_json::json!({"target_pid": target_pid, "signal": signal}))),
-        ActionKind::SignalReceive { signal } => Ok(("SignalReceive".to_string(), serde_json::json!({"signal": signal}))),
-        ActionKind::MemoryMap { addr, size, prot } => Ok(("MemoryMap".to_string(), serde_json::json!({"addr": addr, "size": size, "prot": prot}))),
-        ActionKind::MemoryUnmap { addr, size } => Ok(("MemoryUnmap".to_string(), serde_json::json!({"addr": addr, "size": size}))),
-        ActionKind::FileOpen { path, flags } => Ok(("FileOpen".to_string(), serde_json::json!({"path": path, "flags": flags}))),
-        ActionKind::FileClose { path } => Ok(("FileClose".to_string(), serde_json::json!({"path": path}))),
-        ActionKind::FileStat { path } => Ok(("FileStat".to_string(), serde_json::json!({"path": path}))),
-        ActionKind::FileChmod { path, mode } => Ok(("FileChmod".to_string(), serde_json::json!({"path": path, "mode": mode}))),
-        ActionKind::FileChown { path, uid, gid } => Ok(("FileChown".to_string(), serde_json::json!({"path": path, "uid": uid, "gid": gid}))),
-        ActionKind::Other { syscall, describe } => Ok(("Other".to_string(), serde_json::json!({"syscall": syscall, "describe": describe}))),
-    }
-}
-
-/// Update run statistics
+#### 3.5 Update Statistics
+```rust
 async fn update_run_statistics(client: &Client, run_uuid: &str) -> Result<()> {
     let uuid = Uuid::parse_str(run_uuid)?;
     
@@ -296,3 +254,86 @@ async fn update_run_statistics(client: &Client, run_uuid: &str) -> Result<()> {
     println!("  📈 Updated run statistics");
     Ok(())
 }
+```
+
+### 4. Testing Steps
+
+#### 4.1 Build and Test
+```bash
+# In Docker container
+cd capsule-runtime
+cargo build
+
+# Create test run
+capsule run echo "Hello Database Test"
+
+# Check runs exist
+capsule list
+
+# Send to database
+capsule send
+```
+
+#### 4.2 Verify in Supabase
+```sql
+-- Check run was inserted
+SELECT * FROM recent_runs ORDER BY start_time DESC LIMIT 5;
+
+-- Check events were inserted
+SELECT COUNT(*) as event_count, syscall, COUNT(DISTINCT pid) as process_count
+FROM syscall_events 
+WHERE run_id = (SELECT id FROM runs ORDER BY start_time DESC LIMIT 1)
+GROUP BY syscall 
+ORDER BY event_count DESC;
+
+-- Check for interesting events (non-polling)
+SELECT syscall, operation, abs_path, risk_tags
+FROM syscall_events 
+WHERE run_id = (SELECT id FROM runs ORDER BY start_time DESC LIMIT 1)
+AND syscall NOT IN ('epoll_wait', 'epoll_pwait', 'futex', 'select', 'poll')
+ORDER BY timestamp_us;
+```
+
+### 5. Error Handling
+
+Add proper error handling for:
+- **Database connection failures**
+- **Malformed JSONL lines** 
+- **Missing log files**
+- **UUID parsing errors**
+- **Type conversion errors**
+
+### 6. Performance Optimizations
+
+For production use:
+- **Batch inserts** (insert multiple events per query)
+- **Connection pooling**
+- **Async file reading**
+- **Progress indicators** for large runs
+
+### 7. Command Variations
+
+Ensure these work:
+```bash
+capsule send                    # Send latest run
+capsule send $(capsule last)    # Send specific run by ID  
+capsule send abc123-def456...   # Send by full UUID
+```
+
+## Success Criteria
+
+✅ Run metadata appears in `runs` table  
+✅ Syscall events appear in `syscall_events` table  
+✅ Actions appear in `actions` table  
+✅ Statistics are updated correctly  
+✅ AI queries work in Supabase Studio  
+✅ No data corruption or missing fields  
+
+## Next Phase
+
+After basic insertion works:
+1. **Add agent type detection** from command line
+2. **Implement command extraction** from log metadata
+3. **Add filtering options** (e.g., `--skip-polling`)
+4. **Performance optimization** for large runs
+5. **Retry logic** for failed insertions

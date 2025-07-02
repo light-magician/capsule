@@ -33,6 +33,10 @@ async fn main() -> Result<()> {
         Cmd::Last => runs::handle_last_command(),
         Cmd::List { limit } => runs::handle_list_command(limit),
         Cmd::Send { run_id } => database::send_run_to_database(run_id, database::DatabaseConfig::default()).await,
+        Cmd::Dash { program: _, args: _ } => {
+            println!("Dashboard feature not yet implemented");
+            Ok(())
+        },
     }
 }
 

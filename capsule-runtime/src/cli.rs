@@ -35,4 +35,37 @@ pub enum Cmd {
         #[arg(long, help = "UUID of run to tail (default: latest)")]
         run: Option<String>,
     },
+    /// Show the UUID of the most recent run.
+    ///
+    /// Examples:
+    ///   capsule last
+    Last,
+    /// List all run UUIDs in chronological order (most recent first).
+    ///
+    /// Examples:
+    ///   capsule list
+    ///   capsule list --limit 10
+    List {
+        #[arg(long, help = "Maximum number of runs to show", default_value = "20")]
+        limit: usize,
+    },
+    /// Send run data to database for analysis.
+    ///
+    /// Examples:
+    ///   capsule send                    # Send latest run
+    ///   capsule send abc123-def456...   # Send specific run
+    Send {
+        #[arg(help = "Run UUID to send (default: latest run)")]
+        run_id: Option<String>,
+    },
+    /// Interactive real-time syscall dashboard with visualization.
+    ///
+    /// Examples:
+    ///   capsule dash python3 server.py  # Run with live visualization
+    ///   capsule dash ./my-binary        # Monitor binary execution
+    Dash {
+        program: String,
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+    },
 }

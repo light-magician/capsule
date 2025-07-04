@@ -131,7 +131,7 @@ pub enum SyscallCategory {
 }
 
 /// Detailed operation classification with human descriptions
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum SyscallOperation {
     // File System Operations
     #[serde(rename = "FILE_READ")]

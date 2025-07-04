@@ -135,7 +135,7 @@ fn process_event(
     let now = Instant::now();
     match pending.get_mut(&key) {
         Some(pending_action) => {
-            // Update existing aggregation
+            // Update existing aggregation with enhanced tracking
             pending_action.last_ts = ev.ts;
             pending_action.last_activity = now;
             pending_action.count += 1;
@@ -145,6 +145,23 @@ fn process_event(
             if !pending_action.pids.contains(&ev.pid) {
                 pending_action.pids.push(ev.pid);
             }
+            
+            // Track syscall sequence for pattern recognition
+            pending_action.syscall_sequence.push(ev.call.clone());
+            
+            // Track security events
+            if ev.syscall_category.as_ref() == Some(&SyscallCategory::SecurityManagement) ||
+               !ev.risk_tags.is_empty() {
+                pending_action.security_events += 1;
+            }
+            
+            // Collect human descriptions
+            if let Some(desc) = &ev.human_description {
+                if pending_action.human_descriptions.len() < 5 { // Limit to avoid memory bloat
+                    pending_action.human_descriptions.push(desc.clone());
+                }
+            }
+            
             None
         }
         None => {
@@ -162,6 +179,10 @@ fn process_event(
                     count: 1,
                     last_activity: now,
                     kind_template,
+                    syscall_sequence: vec![ev.call.clone()],
+                    security_events: if ev.syscall_category.as_ref() == Some(&SyscallCategory::SecurityManagement) ||
+                                       !ev.risk_tags.is_empty() { 1 } else { 0 },
+                    human_descriptions: ev.human_description.as_ref().map(|d| vec![d.clone()]).unwrap_or_default(),
                 },
             );
             None
@@ -335,15 +356,15 @@ fn create_action_kind(ev: &SyscallEvent) -> ActionKind {
             let path = get_file_path(ev);
             ActionKind::FileChmod {
                 path,
-                mode: ev.args.get(1).unwrap_or(&0) as &u32,
+                mode: *ev.args.get(1).unwrap_or(&0) as u32,
             }
         },
         (Some(SyscallCategory::FileSystem), Some(SyscallOperation::FileChown)) => {
             let path = get_file_path(ev);
             ActionKind::FileChown {
                 path,
-                uid: ev.args.get(1).unwrap_or(&0) as &u32,
-                gid: ev.args.get(2).unwrap_or(&0) as &u32,
+                uid: *ev.args.get(1).unwrap_or(&0) as u32,
+                gid: *ev.args.get(2).unwrap_or(&0) as u32,
             }
         },
         (Some(SyscallCategory::FileSystem), Some(SyscallOperation::DirectoryRead)) => {
@@ -369,13 +390,13 @@ fn create_action_kind(ev: &SyscallEvent) -> ActionKind {
         (Some(SyscallCategory::ProcessControl), Some(SyscallOperation::ProcessTerminate)) => {
             ActionKind::ProcessExit {
                 pid: ev.pid,
-                exit_code: ev.args.get(0).unwrap_or(&0) as &i32,
+                exit_code: *ev.args.get(0).unwrap_or(&0) as i32,
             }
         },
         (Some(SyscallCategory::ProcessControl), Some(SyscallOperation::ProcessSignal)) => {
             ActionKind::SignalSend {
-                target_pid: ev.args.get(0).unwrap_or(&0) as &u32,
-                signal: ev.args.get(1).unwrap_or(&0) as &i32,
+                target_pid: *ev.args.get(0).unwrap_or(&0) as u32,
+                signal: *ev.args.get(1).unwrap_or(&0) as i32,
             }
         },
         
@@ -435,15 +456,15 @@ fn create_action_kind(ev: &SyscallEvent) -> ActionKind {
         // Memory Management Operations
         (Some(SyscallCategory::MemoryManagement), Some(SyscallOperation::MemoryMap)) => {
             ActionKind::MemoryMap {
-                addr: ev.args.get(0).unwrap_or(&0) as &u64,
-                size: ev.args.get(1).unwrap_or(&0) as &usize,
+                addr: *ev.args.get(0).unwrap_or(&0) as u64,
+                size: *ev.args.get(1).unwrap_or(&0) as usize,
                 prot: format!("{:#x}", ev.args.get(2).unwrap_or(&0)),
             }
         },
         (Some(SyscallCategory::MemoryManagement), Some(SyscallOperation::MemoryUnmap)) => {
             ActionKind::MemoryUnmap {
-                addr: ev.args.get(0).unwrap_or(&0) as &u64,
-                size: ev.args.get(1).unwrap_or(&0) as &usize,
+                addr: *ev.args.get(0).unwrap_or(&0) as u64,
+                size: *ev.args.get(1).unwrap_or(&0) as usize,
             }
         },
         
@@ -496,15 +517,127 @@ fn flush_stale_actions(
     actions
 }
 
-/// Convert a PendingAction to a final Action
-fn finalize_action(pending_action: PendingAction) -> Action {
-    let mut kind = pending_action.kind_template;
+/// Detect common syscall patterns for enhanced semantic understanding
+fn detect_syscall_patterns(syscall_sequence: &[String]) -> Vec<String> {
+    let mut patterns = Vec::new();
+    
+    // File operation patterns
+    if contains_sequence(syscall_sequence, &["faccessat", "openat", "read"]) ||
+       contains_sequence(syscall_sequence, &["openat", "fstat", "read"]) {
+        patterns.push("file_read_pattern".to_string());
+    }
+    
+    if contains_sequence(syscall_sequence, &["openat", "write", "fsync"]) ||
+       contains_sequence(syscall_sequence, &["creat", "write", "close"]) {
+        patterns.push("file_write_pattern".to_string());
+    }
+    
+    // Process creation patterns
+    if contains_sequence(syscall_sequence, &["fork", "execve"]) ||
+       contains_sequence(syscall_sequence, &["clone", "execve"]) {
+        patterns.push("process_spawn_pattern".to_string());
+    }
+    
+    // Network connection patterns
+    if contains_sequence(syscall_sequence, &["socket", "connect", "send"]) {
+        patterns.push("network_client_pattern".to_string());
+    }
+    
+    if contains_sequence(syscall_sequence, &["socket", "bind", "listen", "accept"]) {
+        patterns.push("network_server_pattern".to_string());
+    }
+    
+    // Memory management patterns
+    if contains_sequence(syscall_sequence, &["mmap", "mprotect"]) {
+        patterns.push("memory_exec_pattern".to_string());
+    }
+    
+    // Directory traversal patterns
+    if syscall_sequence.iter().filter(|&s| s == "getdents64").count() > 5 {
+        patterns.push("directory_enumeration_pattern".to_string());
+    }
+    
+    // Rapid file access (potential scanning)
+    if syscall_sequence.iter().filter(|&s| s == "faccessat" || s == "stat").count() > 10 {
+        patterns.push("file_enumeration_pattern".to_string());
+    }
+    
+    // Security-sensitive patterns
+    if contains_sequence(syscall_sequence, &["setuid", "execve"]) ||
+       contains_sequence(syscall_sequence, &["setgid", "execve"]) {
+        patterns.push("privilege_escalation_pattern".to_string());
+    }
+    
+    patterns
+}
+
+/// Helper function to check if a sequence contains a subsequence
+fn contains_sequence(haystack: &[String], needle: &[&str]) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+    
+    for i in 0..=haystack.len() - needle.len() {
+        if haystack[i..i + needle.len()].iter()
+            .zip(needle.iter())
+            .all(|(h, n)| h == n) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Generate human-readable summary from syscall patterns and descriptions
+fn generate_action_summary(pending_action: &PendingAction) -> String {
+    let patterns = detect_syscall_patterns(&pending_action.syscall_sequence);
+    
+    if !patterns.is_empty() {
+        match patterns[0].as_str() {
+            "file_read_pattern" => format!("Read {} bytes using standard file access pattern ({}x)", 
+                pending_action.bytes, pending_action.count),
+            "file_write_pattern" => format!("Write {} bytes using safe file write pattern ({}x)", 
+                pending_action.bytes, pending_action.count),
+            "process_spawn_pattern" => "Spawn child process with standard fork+exec pattern".to_string(),
+            "network_client_pattern" => format!("Establish network connection and transfer {} bytes", 
+                pending_action.bytes),
+            "network_server_pattern" => "Set up network server and accept connections".to_string(),
+            "memory_exec_pattern" => "Map and protect memory region (possible code execution)".to_string(),
+            "directory_enumeration_pattern" => format!("Enumerate directory contents ({}x traversal)", 
+                pending_action.count),
+            "file_enumeration_pattern" => format!("Scan file system ({}x access checks)", 
+                pending_action.count),
+            "privilege_escalation_pattern" => "⚠️ SECURITY: Privilege escalation attempt detected".to_string(),
+            _ => format!("Complex operation involving {} syscalls", pending_action.count),
+        }
+    } else if !pending_action.human_descriptions.is_empty() {
+        format!("{} ({}x)", pending_action.human_descriptions[0], pending_action.count)
+    } else {
+        format!("Repeated {} operations", pending_action.count)
+    }
+}
+
+/// Convert a PendingAction to a final Action with enhanced pattern recognition
+fn finalize_action(mut pending_action: PendingAction) -> Action {
+    let mut kind = pending_action.kind_template.clone();
     
     // Update byte counts for aggregated operations
     match &mut kind {
         ActionKind::FileRead { bytes, .. } => *bytes = pending_action.bytes,
         ActionKind::FileWrite { bytes, .. } => *bytes = pending_action.bytes,
         _ => {}
+    }
+    
+    // If we have multiple syscalls, enhance the description with pattern recognition
+    if pending_action.count > 1 {
+        let summary = generate_action_summary(&pending_action);
+        
+        // For complex operations, use enhanced Other action with pattern summary
+        if pending_action.syscall_sequence.len() > 3 {
+            kind = ActionKind::Other {
+                syscall: format!("{}+{} more", pending_action.syscall_sequence[0], pending_action.count - 1),
+                describe: summary,
+            };
+        }
     }
     
     Action {

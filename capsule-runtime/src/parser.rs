@@ -126,12 +126,16 @@ fn parse_line(line: &str) -> Option<SyscallEvent> {
     let semantic_data =
         semantic::parse_syscall_semantics(&strace_data.syscall_name, clean_line, &strace_data.args);
 
-    // Classify operation and resource type
-    let (operation, resource_type) = classification::classify_syscall(
+    // Enhanced classification with human descriptions
+    let classification = classification::classify_syscall_enhanced(
         &strace_data.syscall_name,
         semantic_data.fd.as_ref(),
         semantic_data.abs_path.as_ref(),
+        strace_data.retval,
     );
+    
+    // Legacy classification for backward compatibility
+    let (operation, resource_type) = (Some(classification.legacy_operation.clone()), classification.resource_type.clone());
 
     // Parse network information for socket syscalls
     let net_info =
@@ -179,6 +183,11 @@ fn parse_line(line: &str) -> Option<SyscallEvent> {
         net: net_info,
         risk_tags,
         high_level_kind,
+        
+        // Enhanced classification
+        syscall_category: Some(classification.category),
+        syscall_operation: Some(classification.operation),
+        human_description: Some(classification.human_description),
 
     })
 }

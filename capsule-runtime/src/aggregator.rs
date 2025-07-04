@@ -1,4 +1,4 @@
-use crate::model::{Action, ActionKind, SyscallEvent};
+use crate::model::{Action, ActionKind, SyscallEvent, SyscallCategory, SyscallOperation};
 use anyhow::Result;
 use smallvec::smallvec;
 use std::collections::HashMap;
@@ -9,16 +9,28 @@ use tokio::sync::mpsc;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
-/// Aggregation key for grouping related syscalls
+/// Enhanced aggregation key for grouping related syscalls
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct AggregationKey {
     pid: u32,
-    fd: Option<i32>,
-    path: Option<PathBuf>,
-    operation_type: String,
+    category: SyscallCategory,
+    operation: SyscallOperation,
+    target: AggregationTarget,
 }
 
-/// Pending action being accumulated
+/// Target of the aggregation for more precise grouping
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+enum AggregationTarget {
+    File { path: String },
+    FileDescriptor { fd: i32 },
+    Network { address: String },
+    Process { target_pid: u32 },
+    Memory { address: String },
+    System,
+    Unknown,
+}
+
+/// Pending action being accumulated with enhanced context
 #[derive(Debug, Clone)]
 struct PendingAction {
     first_ts: u64,
@@ -28,6 +40,9 @@ struct PendingAction {
     count: usize,
     last_activity: Instant,
     kind_template: ActionKind,
+    syscall_sequence: Vec<String>,  // Track syscall sequence for pattern recognition
+    security_events: u32,           // Count of security-relevant events
+    human_descriptions: Vec<String>, // Collect human descriptions
 }
 
 /// Groups bursts of low-level events into semantic `Action`s using sliding windows
@@ -154,137 +169,307 @@ fn process_event(
     }
 }
 
-/// Classify an event and determine its aggregation key and whether it should be aggregated
+/// Enhanced event classification using new syscall categorization
 fn classify_event(ev: &SyscallEvent) -> Option<(AggregationKey, bool)> {
-    let syscall = ev.call.as_str();
+    let category = ev.syscall_category.as_ref()?;
+    let operation = ev.syscall_operation.as_ref()?;
     
-    match syscall {
-        // File I/O operations - aggregate by PID + FD/path
-        "read" | "write" | "pread64" | "pwrite64" => {
-            let fd = ev.args[0] as i32;
-            Some((
-                AggregationKey {
-                    pid: ev.pid,
-                    fd: Some(fd),
-                    path: None,
-                    operation_type: if syscall.contains("read") { "read".to_string() } else { "write".to_string() },
+    // Determine aggregation target based on syscall context
+    let target = determine_aggregation_target(ev, category, operation);
+    
+    // Determine if this event should be aggregated based on category and operation
+    let should_aggregate = should_aggregate_event(category, operation);
+    
+    Some((
+        AggregationKey {
+            pid: ev.pid,
+            category: category.clone(),
+            operation: operation.clone(),
+            target,
+        },
+        should_aggregate,
+    ))
+}
+
+/// Determine the target for aggregation based on syscall context
+fn determine_aggregation_target(ev: &SyscallEvent, category: &SyscallCategory, operation: &SyscallOperation) -> AggregationTarget {
+    match category {
+        SyscallCategory::FileSystem => {
+            // Prefer absolute path, fall back to file descriptor
+            if let Some(path) = &ev.abs_path {
+                AggregationTarget::File { path: path.clone() }
+            } else if let Some(fd) = ev.fd {
+                AggregationTarget::FileDescriptor { fd }
+            } else {
+                AggregationTarget::Unknown
+            }
+        },
+        SyscallCategory::NetworkCommunication => {
+            // Use network address if available, fall back to fd
+            if let Some(net) = &ev.net {
+                let address = match (&net.remote_addr, &net.remote_port) {
+                    (Some(addr), Some(port)) => format!("{}:{}", addr, port),
+                    (Some(addr), None) => addr.clone(),
+                    _ => format!("fd:{}", ev.fd.unwrap_or(-1)),
+                };
+                AggregationTarget::Network { address }
+            } else if let Some(fd) = ev.fd {
+                AggregationTarget::FileDescriptor { fd }
+            } else {
+                AggregationTarget::Unknown
+            }
+        },
+        SyscallCategory::ProcessControl => {
+            // For process signals, use target PID; otherwise use system
+            match operation {
+                SyscallOperation::ProcessSignal => {
+                    // Target PID is usually in first argument for kill, tkill
+                    let target_pid = ev.args[0] as u32;
+                    AggregationTarget::Process { target_pid }
                 },
-                true,
-            ))
-        }
-        
-        // Process lifecycle - don't aggregate, emit immediately
-        "fork" | "vfork" | "clone" | "execve" | "exit" | "exit_group" => {
-            Some((
-                AggregationKey {
-                    pid: ev.pid,
-                    fd: None,
-                    path: None,
-                    operation_type: syscall.to_string(),
+                _ => AggregationTarget::System,
+            }
+        },
+        SyscallCategory::MemoryManagement => {
+            // Group by memory address for mapping operations
+            let address = match operation {
+                SyscallOperation::MemoryMap | SyscallOperation::MemoryUnmap => {
+                    format!("0x{:x}", ev.args.get(0).unwrap_or(&0))
                 },
-                false,
-            ))
-        }
-        
-        // File operations - aggregate by path
-        "open" | "openat" | "stat" | "lstat" | "fstat" | "chmod" | "chown" => {
-            Some((
-                AggregationKey {
-                    pid: ev.pid,
-                    fd: None,
-                    path: None, // TODO: Extract path from args when enricher is available
-                    operation_type: syscall.to_string(),
-                },
-                true,
-            ))
-        }
-        
-        // Network operations - don't aggregate initially
-        "socket" | "connect" | "bind" | "accept" | "listen" => {
-            Some((
-                AggregationKey {
-                    pid: ev.pid,
-                    fd: Some(ev.args[0] as i32),
-                    path: None,
-                    operation_type: syscall.to_string(),
-                },
-                false,
-            ))
-        }
-        
-        _ => None, // Unrecognized syscall
+                _ => "heap".to_string(),
+            };
+            AggregationTarget::Memory { address }
+        },
+        _ => AggregationTarget::System,
     }
 }
 
-/// Create an ActionKind from a syscall event using individual enriched fields
+/// Determine if events of this type should be aggregated
+fn should_aggregate_event(category: &SyscallCategory, operation: &SyscallOperation) -> bool {
+    match category {
+        // File I/O operations benefit from aggregation
+        SyscallCategory::FileSystem => {
+            matches!(operation, 
+                SyscallOperation::FileRead | 
+                SyscallOperation::FileWrite |
+                SyscallOperation::FileStat |
+                SyscallOperation::DirectoryRead
+            )
+        },
+        
+        // Process lifecycle events should be immediate
+        SyscallCategory::ProcessControl => {
+            !matches!(operation,
+                SyscallOperation::ProcessCreate |
+                SyscallOperation::ProcessExecute |
+                SyscallOperation::ProcessTerminate
+            )
+        },
+        
+        // Network operations - aggregate data transfer, not connections
+        SyscallCategory::NetworkCommunication => {
+            matches!(operation,
+                SyscallOperation::NetworkSend |
+                SyscallOperation::NetworkReceive
+            )
+        },
+        
+        // Memory operations can be aggregated
+        SyscallCategory::MemoryManagement => true,
+        
+        // Background system operations should be aggregated
+        SyscallCategory::InterProcessCommunication => true,
+        SyscallCategory::TimeManagement => true,
+        SyscallCategory::SystemInformation => true,
+        
+        // Security and device operations are usually important - don't aggregate
+        SyscallCategory::SecurityManagement => false,
+        SyscallCategory::DeviceManagement => false,
+        
+        // Unknown category - don't aggregate to be safe
+        SyscallCategory::Unknown => false,
+    }
+}
+
+/// Create an ActionKind from a syscall event using enhanced classification
 fn create_action_kind(ev: &SyscallEvent) -> ActionKind {
-    match ev.call.as_str() {
-        "read" | "pread64" => {
-            let fd = ev.args[0] as i32;
-            let path = ev.fd_map.get(&fd)
-                .map(|p| PathBuf::from(p))
-                .unwrap_or_else(|| PathBuf::from(format!("fd:{}", fd)));
-            
+    let category = ev.syscall_category.as_ref();
+    let operation = ev.syscall_operation.as_ref();
+    
+    match (category, operation) {
+        // File System Operations
+        (Some(SyscallCategory::FileSystem), Some(SyscallOperation::FileRead)) => {
+            let path = get_file_path(ev);
             ActionKind::FileRead {
                 path,
                 bytes: if ev.retval > 0 { ev.retval as usize } else { 0 },
             }
         },
-        "write" | "pwrite64" => {
-            let fd = ev.args[0] as i32;
-            let path = ev.fd_map.get(&fd)
-                .map(|p| PathBuf::from(p))
-                .unwrap_or_else(|| PathBuf::from(format!("fd:{}", fd)));
-            
+        (Some(SyscallCategory::FileSystem), Some(SyscallOperation::FileWrite)) => {
+            let path = get_file_path(ev);
             ActionKind::FileWrite {
                 path,
                 bytes: if ev.retval > 0 { ev.retval as usize } else { 0 },
             }
         },
-        "fork" | "vfork" | "clone" => ActionKind::ProcessSpawn {
-            pid: if ev.retval > 0 { ev.retval as u32 } else { ev.pid },
-            argv: ev.argv.clone().unwrap_or_default(),
-            parent_pid: ev.pid,
-        },
-        "execve" => ActionKind::ProcessExec {
-            argv: ev.argv.clone().unwrap_or_default(),
-        },
-        "exit" | "exit_group" => ActionKind::ProcessExit {
-            pid: ev.pid,
-            exit_code: ev.args[0] as i32,
-        },
-        "open" | "openat" => {
-            // Use abs_path if available, otherwise use cwd + "unknown"
+        (Some(SyscallCategory::FileSystem), Some(SyscallOperation::FileOpen)) => {
             let path = ev.abs_path.as_ref()
                 .map(|p| PathBuf::from(p))
-                .or_else(|| ev.cwd.as_ref().map(|cwd| PathBuf::from(cwd).join("unknown")))
                 .unwrap_or_else(|| PathBuf::from("unknown"));
-            
             ActionKind::FileOpen {
                 path,
-                flags: format!("{:#x}", ev.args[1]),
+                flags: format!("{:#x}", ev.args.get(1).unwrap_or(&0)),
             }
         },
-        "socket" => ActionKind::Other {
-            syscall: ev.call.clone(),
-            describe: format!("Socket creation: domain={}, type={}, protocol={}", 
-                ev.args[0], ev.args[1], ev.args[2]),
+        (Some(SyscallCategory::FileSystem), Some(SyscallOperation::FileClose)) => {
+            let path = get_file_path(ev);
+            ActionKind::FileClose { path }
         },
-        "connect" => {
-            let fd = ev.args[0] as i32;
-            let socket_desc = ev.fd_map.get(&fd)
-                .cloned()
-                .unwrap_or_else(|| format!("socket:{}", fd));
-            
+        (Some(SyscallCategory::FileSystem), Some(SyscallOperation::FileStat)) => {
+            let path = ev.abs_path.as_ref()
+                .map(|p| PathBuf::from(p))
+                .unwrap_or_else(|| PathBuf::from("unknown"));
+            ActionKind::FileStat { path }
+        },
+        (Some(SyscallCategory::FileSystem), Some(SyscallOperation::FileChmod)) => {
+            let path = get_file_path(ev);
+            ActionKind::FileChmod {
+                path,
+                mode: ev.args.get(1).unwrap_or(&0) as &u32,
+            }
+        },
+        (Some(SyscallCategory::FileSystem), Some(SyscallOperation::FileChown)) => {
+            let path = get_file_path(ev);
+            ActionKind::FileChown {
+                path,
+                uid: ev.args.get(1).unwrap_or(&0) as &u32,
+                gid: ev.args.get(2).unwrap_or(&0) as &u32,
+            }
+        },
+        (Some(SyscallCategory::FileSystem), Some(SyscallOperation::DirectoryRead)) => {
+            let path = get_file_path(ev);
+            // Rough estimate of entries based on bytes returned
+            let entries = if ev.retval > 0 { (ev.retval / 20).max(1) as usize } else { 0 };
+            ActionKind::DirectoryList { path, entries }
+        },
+        
+        // Process Control Operations
+        (Some(SyscallCategory::ProcessControl), Some(SyscallOperation::ProcessCreate)) => {
+            ActionKind::ProcessSpawn {
+                pid: if ev.retval > 0 { ev.retval as u32 } else { ev.pid },
+                argv: ev.argv.clone().unwrap_or_default(),
+                parent_pid: ev.pid,
+            }
+        },
+        (Some(SyscallCategory::ProcessControl), Some(SyscallOperation::ProcessExecute)) => {
+            ActionKind::ProcessExec {
+                argv: ev.argv.clone().unwrap_or_default(),
+            }
+        },
+        (Some(SyscallCategory::ProcessControl), Some(SyscallOperation::ProcessTerminate)) => {
+            ActionKind::ProcessExit {
+                pid: ev.pid,
+                exit_code: ev.args.get(0).unwrap_or(&0) as &i32,
+            }
+        },
+        (Some(SyscallCategory::ProcessControl), Some(SyscallOperation::ProcessSignal)) => {
+            ActionKind::SignalSend {
+                target_pid: ev.args.get(0).unwrap_or(&0) as &u32,
+                signal: ev.args.get(1).unwrap_or(&0) as &i32,
+            }
+        },
+        
+        // Network Operations
+        (Some(SyscallCategory::NetworkCommunication), Some(SyscallOperation::NetworkConnect)) => {
+            if let Some(net) = &ev.net {
+                if let (Some(addr), Some(port)) = (&net.remote_addr, &net.remote_port) {
+                    if let Ok(socket_addr) = format!("{}:{}", addr, port).parse() {
+                        return ActionKind::SocketConnect {
+                            addr: socket_addr,
+                            protocol: net.protocol.clone().unwrap_or_else(|| "TCP".to_string()),
+                        };
+                    }
+                }
+            }
             ActionKind::Other {
                 syscall: ev.call.clone(),
-                describe: format!("Connect to {}", socket_desc),
+                describe: ev.human_description.clone().unwrap_or_else(|| "Network connect".to_string()),
             }
         },
-        _ => ActionKind::Other {
-            syscall: ev.call.clone(),
-            describe: format!("Syscall: {}", ev.call),
+        (Some(SyscallCategory::NetworkCommunication), Some(SyscallOperation::NetworkBind)) => {
+            if let Some(net) = &ev.net {
+                if let (Some(addr), Some(port)) = (&net.local_addr, &net.local_port) {
+                    if let Ok(socket_addr) = format!("{}:{}", addr, port).parse() {
+                        return ActionKind::SocketBind {
+                            addr: socket_addr,
+                            protocol: net.protocol.clone().unwrap_or_else(|| "TCP".to_string()),
+                        };
+                    }
+                }
+            }
+            ActionKind::Other {
+                syscall: ev.call.clone(),
+                describe: ev.human_description.clone().unwrap_or_else(|| "Network bind".to_string()),
+            }
         },
+        (Some(SyscallCategory::NetworkCommunication), Some(SyscallOperation::NetworkAccept)) => {
+            if let Some(net) = &ev.net {
+                if let (Some(local_addr), Some(local_port), Some(remote_addr), Some(remote_port)) = 
+                    (&net.local_addr, &net.local_port, &net.remote_addr, &net.remote_port) {
+                    if let (Ok(local_socket), Ok(remote_socket)) = 
+                        (format!("{}:{}", local_addr, local_port).parse(), 
+                         format!("{}:{}", remote_addr, remote_port).parse()) {
+                        return ActionKind::SocketAccept {
+                            local_addr: local_socket,
+                            remote_addr: remote_socket,
+                        };
+                    }
+                }
+            }
+            ActionKind::Other {
+                syscall: ev.call.clone(),
+                describe: ev.human_description.clone().unwrap_or_else(|| "Network accept".to_string()),
+            }
+        },
+        
+        // Memory Management Operations
+        (Some(SyscallCategory::MemoryManagement), Some(SyscallOperation::MemoryMap)) => {
+            ActionKind::MemoryMap {
+                addr: ev.args.get(0).unwrap_or(&0) as &u64,
+                size: ev.args.get(1).unwrap_or(&0) as &usize,
+                prot: format!("{:#x}", ev.args.get(2).unwrap_or(&0)),
+            }
+        },
+        (Some(SyscallCategory::MemoryManagement), Some(SyscallOperation::MemoryUnmap)) => {
+            ActionKind::MemoryUnmap {
+                addr: ev.args.get(0).unwrap_or(&0) as &u64,
+                size: ev.args.get(1).unwrap_or(&0) as &usize,
+            }
+        },
+        
+        // Default fallback using human description
+        _ => {
+            ActionKind::Other {
+                syscall: ev.call.clone(),
+                describe: ev.human_description.clone()
+                    .unwrap_or_else(|| format!("{}({})", ev.call, 
+                        ev.args.iter().take(3).map(|a| a.to_string()).collect::<Vec<_>>().join(", ")
+                    )),
+            }
+        },
+    }
+}
+
+/// Helper function to get file path from syscall event
+fn get_file_path(ev: &SyscallEvent) -> PathBuf {
+    if let Some(path) = &ev.abs_path {
+        PathBuf::from(path)
+    } else if let Some(fd) = ev.fd {
+        ev.fd_map.get(&fd)
+            .map(|p| PathBuf::from(p))
+            .unwrap_or_else(|| PathBuf::from(format!("fd:{}", fd)))
+    } else {
+        PathBuf::from("unknown")
     }
 }
 

@@ -72,6 +72,14 @@ pub struct SyscallEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub high_level_kind: Option<String>,  // bucket used by Aggregator
     
+    // Enhanced classification (New)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub syscall_category: Option<SyscallCategory>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub syscall_operation: Option<SyscallOperation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub human_description: Option<String>,  // "Read 1.2KB from Python source file"
+    
 }
 
 /// Resource type classification
@@ -97,7 +105,240 @@ pub enum ResourceType {
     Unknown,
 }
 
-/// Operation type classification
+/// High-level syscall categories for better classification
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum SyscallCategory {
+    #[serde(rename = "FILE_SYSTEM")]
+    FileSystem,
+    #[serde(rename = "PROCESS_CONTROL")]
+    ProcessControl,
+    #[serde(rename = "MEMORY_MANAGEMENT")]
+    MemoryManagement,
+    #[serde(rename = "NETWORK_COMMUNICATION")]
+    NetworkCommunication,
+    #[serde(rename = "INTER_PROCESS_COMMUNICATION")]
+    InterProcessCommunication,
+    #[serde(rename = "SYSTEM_INFORMATION")]
+    SystemInformation,
+    #[serde(rename = "DEVICE_MANAGEMENT")]
+    DeviceManagement,
+    #[serde(rename = "SECURITY_MANAGEMENT")]
+    SecurityManagement,
+    #[serde(rename = "TIME_MANAGEMENT")]
+    TimeManagement,
+    #[serde(rename = "UNKNOWN")]
+    Unknown,
+}
+
+/// Detailed operation classification with human descriptions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SyscallOperation {
+    // File System Operations
+    #[serde(rename = "FILE_READ")]
+    FileRead,
+    #[serde(rename = "FILE_WRITE")]
+    FileWrite,
+    #[serde(rename = "FILE_OPEN")]
+    FileOpen,
+    #[serde(rename = "FILE_CLOSE")]
+    FileClose,
+    #[serde(rename = "FILE_CREATE")]
+    FileCreate,
+    #[serde(rename = "FILE_DELETE")]
+    FileDelete,
+    #[serde(rename = "FILE_STAT")]
+    FileStat,
+    #[serde(rename = "FILE_CHMOD")]
+    FileChmod,
+    #[serde(rename = "FILE_CHOWN")]
+    FileChown,
+    #[serde(rename = "FILE_SEEK")]
+    FileSeek,
+    #[serde(rename = "FILE_SYNC")]
+    FileSync,
+    #[serde(rename = "FILE_DUPLICATE")]
+    FileDuplicate,
+    #[serde(rename = "FILE_LOCK")]
+    FileLock,
+    #[serde(rename = "FILE_TRUNCATE")]
+    FileTruncate,
+    #[serde(rename = "FILE_RENAME")]
+    FileRename,
+    #[serde(rename = "FILE_LINK")]
+    FileLink,
+    #[serde(rename = "DIR_READ")]
+    DirectoryRead,
+    #[serde(rename = "DIR_CREATE")]
+    DirectoryCreate,
+    #[serde(rename = "DIR_DELETE")]
+    DirectoryDelete,
+    #[serde(rename = "DIR_CHANGE")]
+    DirectoryChange,
+    #[serde(rename = "FILE_ATTR_READ")]
+    FileAttributeRead,
+    #[serde(rename = "FILE_ATTR_WRITE")]
+    FileAttributeWrite,
+    
+    // Process Control Operations  
+    #[serde(rename = "PROCESS_CREATE")]
+    ProcessCreate,
+    #[serde(rename = "PROCESS_EXECUTE")]
+    ProcessExecute,
+    #[serde(rename = "PROCESS_TERMINATE")]
+    ProcessTerminate,
+    #[serde(rename = "PROCESS_WAIT")]
+    ProcessWait,
+    #[serde(rename = "PROCESS_SIGNAL")]
+    ProcessSignal,
+    #[serde(rename = "PROCESS_QUERY")]
+    ProcessQuery,
+    #[serde(rename = "PROCESS_PRIORITY")]
+    ProcessPriority,
+    #[serde(rename = "PROCESS_AFFINITY")]
+    ProcessAffinity,
+    #[serde(rename = "PROCESS_SETID")]
+    ProcessSetId,
+    #[serde(rename = "PROCESS_GETID")]
+    ProcessGetId,
+    #[serde(rename = "PROCESS_GROUP")]
+    ProcessGroup,
+    #[serde(rename = "PROCESS_SESSION")]
+    ProcessSession,
+    
+    // Memory Management Operations
+    #[serde(rename = "MEMORY_ALLOCATE")]
+    MemoryAllocate,
+    #[serde(rename = "MEMORY_FREE")]
+    MemoryFree,
+    #[serde(rename = "MEMORY_MAP")]
+    MemoryMap,
+    #[serde(rename = "MEMORY_UNMAP")]
+    MemoryUnmap,
+    #[serde(rename = "MEMORY_PROTECT")]
+    MemoryProtect,
+    #[serde(rename = "MEMORY_ADVISE")]
+    MemoryAdvise,
+    #[serde(rename = "MEMORY_LOCK")]
+    MemoryLock,
+    #[serde(rename = "MEMORY_UNLOCK")]
+    MemoryUnlock,
+    #[serde(rename = "MEMORY_SYNC")]
+    MemorySync,
+    
+    // Network Operations
+    #[serde(rename = "NETWORK_SOCKET_CREATE")]
+    NetworkSocketCreate,
+    #[serde(rename = "NETWORK_CONNECT")]
+    NetworkConnect,
+    #[serde(rename = "NETWORK_BIND")]
+    NetworkBind,
+    #[serde(rename = "NETWORK_LISTEN")]
+    NetworkListen,
+    #[serde(rename = "NETWORK_ACCEPT")]
+    NetworkAccept,
+    #[serde(rename = "NETWORK_SEND")]
+    NetworkSend,
+    #[serde(rename = "NETWORK_RECEIVE")]
+    NetworkReceive,
+    #[serde(rename = "NETWORK_SHUTDOWN")]
+    NetworkShutdown,
+    #[serde(rename = "NETWORK_SOCKOPT")]
+    NetworkSocketOption,
+    
+    // IPC Operations
+    #[serde(rename = "IPC_PIPE_CREATE")]
+    IPCPipeCreate,
+    #[serde(rename = "IPC_FIFO_CREATE")]
+    IPCFifoCreate,
+    #[serde(rename = "IPC_SHM_CREATE")]
+    IPCShmCreate,
+    #[serde(rename = "IPC_SHM_ATTACH")]
+    IPCShmAttach,
+    #[serde(rename = "IPC_SHM_DETACH")]
+    IPCShmDetach,
+    #[serde(rename = "IPC_SHM_CONTROL")]
+    IPCShmControl,
+    #[serde(rename = "IPC_MSG_CREATE")]
+    IPCMsgCreate,
+    #[serde(rename = "IPC_MSG_SEND")]
+    IPCMsgSend,
+    #[serde(rename = "IPC_MSG_RECEIVE")]
+    IPCMsgReceive,
+    #[serde(rename = "IPC_MSG_CONTROL")]
+    IPCMsgControl,
+    #[serde(rename = "IPC_SEM_CREATE")]
+    IPCSemCreate,
+    #[serde(rename = "IPC_SEM_OPERATE")]
+    IPCSemOperate,
+    #[serde(rename = "IPC_SEM_CONTROL")]
+    IPCSemControl,
+    #[serde(rename = "IPC_EVENTFD")]
+    IPCEventFd,
+    #[serde(rename = "IPC_SIGNALFD")]
+    IPCSignalFd,
+    
+    // System Information
+    #[serde(rename = "SYSTEM_INFO")]
+    SystemInfo,
+    #[serde(rename = "SYSTEM_HOSTNAME")]
+    SystemHostname,
+    #[serde(rename = "SYSTEM_UNAME")]
+    SystemUname,
+    #[serde(rename = "SYSTEM_SYSINFO")]
+    SystemSysinfo,
+    #[serde(rename = "SYSTEM_GETRLIMIT")]
+    SystemGetResourceLimit,
+    #[serde(rename = "SYSTEM_SETRLIMIT")]
+    SystemSetResourceLimit,
+    #[serde(rename = "SYSTEM_GETRUSAGE")]
+    SystemGetResourceUsage,
+    
+    // Time Management
+    #[serde(rename = "TIME_GET")]
+    TimeGet,
+    #[serde(rename = "TIME_SET")]
+    TimeSet,
+    #[serde(rename = "TIME_SLEEP")]
+    TimeSleep,
+    #[serde(rename = "TIME_ALARM")]
+    TimeAlarm,
+    #[serde(rename = "TIME_TIMER_CREATE")]
+    TimeTimerCreate,
+    #[serde(rename = "TIME_TIMER_DELETE")]
+    TimeTimerDelete,
+    #[serde(rename = "TIME_TIMER_SET")]
+    TimeTimerSet,
+    
+    // Device Management
+    #[serde(rename = "DEVICE_IOCTL")]
+    DeviceIoctl,
+    #[serde(rename = "DEVICE_POLL")]
+    DevicePoll,
+    #[serde(rename = "DEVICE_SELECT")]
+    DeviceSelect,
+    #[serde(rename = "DEVICE_EPOLL")]
+    DeviceEpoll,
+    
+    // Security Management
+    #[serde(rename = "SECURITY_SETUID")]
+    SecuritySetUid,
+    #[serde(rename = "SECURITY_SETGID")]
+    SecuritySetGid,
+    #[serde(rename = "SECURITY_CAPABILITY")]
+    SecurityCapability,
+    #[serde(rename = "SECURITY_CHROOT")]
+    SecurityChroot,
+    #[serde(rename = "SECURITY_PTRACE")]
+    SecurityPtrace,
+    #[serde(rename = "SECURITY_SECCOMP")]
+    SecuritySeccomp,
+    
+    // Catch-all
+    #[serde(rename = "OTHER")]
+    Other,
+}
+
+/// Legacy Operation enum for backward compatibility
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operation {
     #[serde(rename = "READ")]

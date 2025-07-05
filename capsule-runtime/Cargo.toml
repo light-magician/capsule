@@ -14,7 +14,9 @@ anyhow      = "1.0.98"                    # ergonomic error handling
 blake3      = "1.8.2"                     # hash-chain
 chrono      = { version = "0.4.41", features = ["serde"] }  # human ts in logs
 clap        = { version = "4.5.37", default-features = true, features = ["derive", "env"] }
+crossterm   = "0.27"                      # Terminal control for TUI
 ctrlc       = "3.4.7"                     # Ctrl-C graceful shutdown
+ratatui     = "0.26"                      # Terminal user interface framework
 daemonize = "0.5.0"
 dirs = "6.0.0"
 hex         = "0.4.3"                     # hex-encode Blake3 digests

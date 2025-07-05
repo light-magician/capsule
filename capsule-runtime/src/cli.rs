@@ -68,4 +68,22 @@ pub enum Cmd {
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
+    /// Watch action logs with intelligent collapsing of repeated actions.
+    ///
+    /// Examples:
+    ///   capsule watch                   # Watch latest run's actions
+    ///   capsule watch --run abc123      # Watch specific run's actions
+    ///   capsule watch --follow          # Follow new actions as they arrive
+    Watch {
+        #[arg(long, help = "UUID of run to watch (default: latest)")]
+        run: Option<String>,
+        #[arg(long, help = "Disable live following (static mode)")]
+        no_follow: bool,
+        #[arg(long, help = "Refresh interval in milliseconds for live mode", default_value = "100")]
+        interval: u64,
+        #[arg(long, help = "Show only security-relevant actions")]
+        security_only: bool,
+        #[arg(long, help = "Filter by process ID")]
+        pid: Option<u32>,
+    },
 }

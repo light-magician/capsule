@@ -11,6 +11,7 @@ mod risk;
 mod runs;
 mod tail;
 mod trace;
+mod watch;
 
 use anyhow::Result;
 use clap::Parser;
@@ -36,6 +37,16 @@ async fn main() -> Result<()> {
         Cmd::Dash { program: _, args: _ } => {
             println!("Dashboard feature not yet implemented");
             Ok(())
+        },
+        Cmd::Watch { run, no_follow, interval, security_only, pid } => {
+            let config = watch::WatchConfig {
+                run_uuid: run,
+                follow: !no_follow, // Default to live mode unless --no-follow
+                interval,
+                security_only,
+                pid_filter: pid,
+            };
+            watch::run_watch(config)
         },
     }
 }

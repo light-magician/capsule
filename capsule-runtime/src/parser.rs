@@ -188,6 +188,17 @@ fn parse_line(line: &str) -> Option<SyscallEvent> {
         syscall_category: Some(classification.category),
         syscall_operation: Some(classification.operation),
         human_description: Some(classification.human_description),
+        
+        // Forensic tracking fields (initialized as None, will be populated by enricher)
+        process_forensics: None,
+        file_forensics: None,
+        network_forensics: None,
+        memory_forensics: None,
+        security_forensics: None,
+        signal_forensics: None,
+        environment_forensics: None,
+        permission_analysis: None,
+        forensic_summary: None,
 
     })
 }

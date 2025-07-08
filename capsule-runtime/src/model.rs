@@ -664,7 +664,7 @@ pub struct MemoryForensics {
     pub pipe_info: Option<PipeInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum MemoryOperation {
     Map,
     Unmap,

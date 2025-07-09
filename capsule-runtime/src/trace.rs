@@ -27,7 +27,7 @@ pub async fn run_with_cancellation(
     child
         .arg("-f") // follow forks
         .arg("-tt") // timestamps with microseconds
-        .arg("-yy") // decode file descriptors  
+        .arg("-yy") // decode file descriptors
         .arg("-v") // verbose - don't abbreviate structures
         .arg("-x") // print strings in hex (no escape sequences)
         .arg("-s")
@@ -71,7 +71,7 @@ pub async fn run_with_cancellation(
                 // Kill the entire process group
                 let _ = kill_process_group(pid).await;
             }
-            
+
             // Force kill the strace process itself
             let _ = child.kill().await;
         }
@@ -87,7 +87,7 @@ async fn kill_process_group(pid: u32) -> Result<()> {
     use tokio::process::Command;
 
     // Terminating process group
-    
+
     // First, try to kill child processes nicely
     let _ = Command::new("pkill")
         .arg("-TERM")
@@ -95,10 +95,10 @@ async fn kill_process_group(pid: u32) -> Result<()> {
         .arg(pid.to_string())
         .output()
         .await;
-    
+
     // Give processes a moment to terminate gracefully
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    
+
     // Then force kill any remaining processes
     let _ = Command::new("pkill")
         .arg("-KILL")
@@ -106,14 +106,14 @@ async fn kill_process_group(pid: u32) -> Result<()> {
         .arg(pid.to_string())
         .output()
         .await;
-    
+
     // Also kill the main process
     let _ = Command::new("kill")
         .arg("-KILL")
         .arg(pid.to_string())
         .output()
         .await;
-    
+
     // Sent termination signals to process group
 
     Ok(())

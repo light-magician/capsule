@@ -25,7 +25,7 @@ RUN npm install -g @anthropic-ai/claude-code
 WORKDIR /capsule
 COPY capsule-runtime/ ./capsule-runtime
 COPY capsule-agents/  ./capsule-agents
-
+COPY capsule-runtime-v2/ ./capsule-runtime-v2
 # ----------- INSTALL CAPSULE GLOBALLY --------------------
 # Build and install capsule globally
 RUN cd capsule-runtime && \

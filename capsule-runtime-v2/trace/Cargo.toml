@@ -8,7 +8,4 @@ tokio.workspace = true
 tokio-util.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-regex.workspace = true
 

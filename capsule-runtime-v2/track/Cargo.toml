@@ -1,0 +1,13 @@
+[package]
+name = "track"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+core = { path = "../core" }
+parse = { path = "../parse" }
+anyhow.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true

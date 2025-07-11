@@ -9,6 +9,7 @@ use crate::workflow::{AgentWorkflow, ProcessLabel};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use anyhow::Result;
 /// A single process node in the process tree
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessNode {
@@ -52,7 +53,7 @@ impl ProcessTree {
     }
 
     /// update tree with a process event
-    pub fn update(&mut self, event: ProcessEvent) -> Result<(), String> {
+    pub fn update(&mut self, event: ProcessEvent) -> Result<()> {
         match event.event_type {
             ProcessEventType::Spawn => self.add_process(event),
             ProcessEventType::Exit => self.remove_process(event.pid, event.exit_code),
@@ -60,7 +61,7 @@ impl ProcessTree {
     }
 
     /// add a new process to the tree
-    fn add_process(&mut self, event: ProcessEvent) -> Result<(), String> {
+    fn add_process(&mut self, event: ProcessEvent) -> Result<()> {
         // set root if this is the first process
         if self.root_pid.is_none() {
             self.root_pid = Some(event.pid);
@@ -89,7 +90,7 @@ impl ProcessTree {
     }
 
     /// remove process from active set and mark end time
-    fn remove_process(&mut self, pid: u32, exit_code: Option<i32>) -> Result<(), String> {
+    fn remove_process(&mut self, pid: u32, exit_code: Option<i32>) -> Result<()> {
         if let Some(node) = self.nodes.get_mut(&pid) {
             node.end_time = Some(chrono::Utc::now().timestamp_micros() as u64);
         }

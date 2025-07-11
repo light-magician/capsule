@@ -1,11 +1,52 @@
 
+//! Command implementations for capsule CLI
 
 use anyhow::Result;
-use tokio::sync::broadcast;
-use tokio_util::sync::CancellationToken;
+use tracing::{info, error};
+use crate::{pipeline::Pipeline, session::{SessionManager, SessionStatus}};
 
-/// run program with process tracing
+/// Run program with full pipeline: trace → parse → track
+pub async fn run_with_pipeline(program: String, args: Vec<String>) -> Result<()> {
+    // Build command line
+    let mut cmdline = vec![program];
+    cmdline.extend(args);
+
+    info!("Starting capsule session for command: {:?}", cmdline);
+
+    // Create session directory and metadata
+    let mut session_metadata = SessionManager::create_session(cmdline.clone()).await?;
+    let session_dir = SessionManager::session_dir_string(&session_metadata);
+    
+    info!("Created session: {} at {}", session_metadata.session_id, session_dir);
+
+    // Create and run the pipeline
+    let mut pipeline = Pipeline::new();
+    let result = pipeline.run(cmdline, session_dir).await;
+
+    // Update session status based on result
+    let final_status = match &result {
+        Ok(()) => {
+            info!("Session completed successfully: {}", session_metadata.session_id);
+            SessionStatus::Completed
+        },
+        Err(e) => {
+            error!("Session failed: {} - {}", session_metadata.session_id, e);
+            SessionStatus::Failed(e.to_string())
+        }
+    };
+
+    // Update session metadata
+    SessionManager::update_session_status(&mut session_metadata, final_status).await?;
+
+    result
+}
+
+/// Legacy run command for backwards compatibility (kept for reference)
+#[allow(dead_code)]
 pub async fn run_transient(program: String, args: Vec<String>) -> Result<()> {
+    use tokio::sync::broadcast;
+    use tokio_util::sync::CancellationToken;
+
     // build command line 
     let mut cmdline = vec![program];
     cmdline.extend(args);

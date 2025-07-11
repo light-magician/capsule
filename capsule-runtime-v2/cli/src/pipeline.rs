@@ -1,0 +1,257 @@
+//! Tokio pipeline orchestration for trace → parse → track
+//!
+//! Coordinates the async pipeline using JoinSet, broadcast channels,
+//! and cancellation tokens for graceful shutdown.
+
+use anyhow::Result;
+use core::events::ProcessEvent;
+use std::time::Duration;
+use tokio::sync::{broadcast, mpsc};
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
+use tracing::{info, warn, error};
+
+pub struct Pipeline {
+    cancellation_token: CancellationToken,
+    task_set: JoinSet<Result<()>>,
+}
+
+impl Pipeline {
+    pub fn new() -> Self {
+        Self {
+            cancellation_token: CancellationToken::new(),
+            task_set: JoinSet::new(),
+        }
+    }
+
+    /// Run the complete pipeline: trace → parse → track
+    pub async fn run(&mut self, cmdline: Vec<String>, session_dir: String) -> Result<()> {
+        info!("Starting pipeline for command: {:?}", cmdline);
+
+        // Create broadcast channels for pipeline communication
+        let (tx_raw, _) = broadcast::channel::<String>(8192);
+        let (tx_events, _) = broadcast::channel::<ProcessEvent>(4096);
+
+        // Ready synchronization - wait for all tasks to be ready
+        let (ready_tx, mut ready_rx) = mpsc::channel::<()>(3);
+
+        // Spawn trace task
+        self.task_set.spawn(spawn_trace_task(
+            cmdline,
+            tx_raw.clone(),
+            ready_tx.clone(),
+            self.cancellation_token.clone(),
+        ));
+
+        // Spawn parse task  
+        self.task_set.spawn(spawn_parse_task(
+            tx_raw.subscribe(),
+            tx_events.clone(),
+            ready_tx.clone(),
+            self.cancellation_token.clone(),
+        ));
+
+        // Spawn track task
+        self.task_set.spawn(spawn_track_task(
+            tx_events.subscribe(),
+            session_dir,
+            ready_tx,
+            self.cancellation_token.clone(),
+        ));
+
+        // Wait for all tasks to signal ready
+        info!("Waiting for pipeline tasks to be ready...");
+        for i in 0..3 {
+            match ready_rx.recv().await {
+                Some(()) => info!("Task {} ready", i + 1),
+                None => return Err(anyhow::anyhow!("Ready channel closed unexpectedly")),
+            }
+        }
+        info!("All pipeline tasks ready, starting execution");
+
+        // Handle graceful shutdown
+        tokio::select! {
+            // Wait for tasks to complete naturally
+            result = self.wait_for_tasks() => {
+                match result {
+                    Ok(()) => info!("Pipeline completed successfully"),
+                    Err(e) => error!("Pipeline error: {}", e),
+                }
+            },
+            // Handle Ctrl+C
+            _ = tokio::signal::ctrl_c() => {
+                warn!("Received Ctrl+C, initiating graceful shutdown...");
+                self.cancellation_token.cancel();
+                
+                // Give tasks 5 seconds to clean up
+                let shutdown_result = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    self.wait_for_tasks()
+                ).await;
+                
+                match shutdown_result {
+                    Ok(Ok(())) => info!("Graceful shutdown completed"),
+                    Ok(Err(e)) => warn!("Shutdown with errors: {}", e),
+                    Err(_) => warn!("Shutdown timeout, some tasks may not have cleaned up"),
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+}
+
+async fn spawn_trace_task(
+    cmdline: Vec<String>,
+    tx_raw: broadcast::Sender<String>,
+    ready_tx: mpsc::Sender<()>,
+    cancellation_token: CancellationToken,
+) -> Result<()> {
+        // Signal ready immediately (trace doesn't need setup)
+        ready_tx.send(()).await.map_err(|_| anyhow::anyhow!("Ready channel closed"))?;
+        
+        // Start tracing
+        trace::LinuxTracer::run_with_cancellation(cmdline, tx_raw, cancellation_token).await
+    }
+
+async fn spawn_parse_task(
+    mut rx_raw: broadcast::Receiver<String>,
+    tx_events: broadcast::Sender<ProcessEvent>,
+    ready_tx: mpsc::Sender<()>,
+    cancellation_token: CancellationToken,
+) -> Result<()> {
+        // Signal ready immediately (parser doesn't need setup)
+        ready_tx.send(()).await.map_err(|_| anyhow::anyhow!("Ready channel closed"))?;
+
+        // Parse strace lines and filter for process events
+        loop {
+            tokio::select! {
+                line_result = rx_raw.recv() => {
+                    match line_result {
+                        Ok(line) => {
+                            // Parse the strace line
+                            let parse_result = parse::StraceParser::parse_line(&line);
+                            
+                            if let parse::StraceParseResult::Event(strace_event) = parse_result {
+                                // Filter for process events only
+                                if parse::StraceParser::is_process_event(&strace_event.syscall) {
+                                    // Convert StraceEvent to ProcessEvent
+                                    if let Some(process_event) = convert_to_process_event(strace_event) {
+                                        if tx_events.send(process_event).is_err() {
+                                            // No more receivers
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("Parser lagged by {} events", n);
+                        },
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                },
+                _ = cancellation_token.cancelled() => {
+                    info!("Parse task received cancellation signal");
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+async fn spawn_track_task(
+    rx_events: broadcast::Receiver<ProcessEvent>,
+    session_dir: String,
+    ready_tx: mpsc::Sender<()>,
+    cancellation_token: CancellationToken,
+) -> Result<()> {
+        // Create the tracker and signal ready
+        let tracker = track::ProcessTracker::new(session_dir).await?;
+        ready_tx.send(()).await.map_err(|_| anyhow::anyhow!("Ready channel closed"))?;
+
+        // Run the tracker
+        tracker.run(rx_events, ready_tx, cancellation_token).await
+    }
+
+/// Convert StraceEvent to ProcessEvent based on syscall type
+fn convert_to_process_event(strace_event: parse::StraceEvent) -> Option<ProcessEvent> {
+        use core::events::{ProcessEvent, ProcessEventType};
+        
+        // Parse timestamp - convert from HH:MM:SS.microseconds to microseconds since epoch
+        let timestamp = parse_timestamp(&strace_event.timestamp);
+        
+        match strace_event.syscall.as_str() {
+            "execve" | "clone" | "fork" | "vfork" => {
+                // Parse command line from execve args or use basic info for clone/fork
+                let command_line = if strace_event.syscall == "execve" {
+                    parse_execve_args(&strace_event.args)
+                } else {
+                    vec![format!("{}:{}", strace_event.syscall, strace_event.pid)]
+                };
+
+                Some(ProcessEvent {
+                    timestamp,
+                    pid: strace_event.pid,
+                    ppid: 0, // Will be updated by tracker from process tree
+                    event_type: ProcessEventType::Spawn,
+                    command_line,
+                    working_dir: None,
+                    exit_code: None,
+                })
+            },
+            "exit_group" => {
+                // Parse exit code from result
+                let exit_code = strace_event.result
+                    .and_then(|r| r.parse::<i32>().ok());
+
+                Some(ProcessEvent {
+                    timestamp,
+                    pid: strace_event.pid,
+                    ppid: 0,
+                    event_type: ProcessEventType::Exit,
+                    command_line: vec![],
+                    working_dir: None,
+                    exit_code,
+                })
+            },
+            _ => None, // Not a process event we care about
+        }
+    }
+
+fn parse_timestamp(_timestamp_str: &str) -> u64 {
+    // Convert HH:MM:SS.microseconds to microseconds since start
+    // For now, just use current time in microseconds
+    chrono::Utc::now().timestamp_micros() as u64
+}
+
+fn parse_execve_args(args_str: &str) -> Vec<String> {
+    // Basic parsing of execve arguments - could be enhanced
+    // execve("/bin/ls", ["ls", "-la"], ...)
+    if args_str.contains("[") {
+        // Try to extract the command array
+        vec!["execve".to_string()] // Simplified for now
+    } else {
+        vec!["unknown".to_string()]
+    }
+}
+
+impl Pipeline {
+    async fn wait_for_tasks(&mut self) -> Result<()> {
+        while let Some(result) = self.task_set.join_next().await {
+            match result {
+                Ok(task_result) => {
+                    if let Err(e) = task_result {
+                        error!("Task error: {}", e);
+                    }
+                },
+                Err(e) => {
+                    error!("Task join error: {}", e);
+                }
+            }
+        }
+        Ok(())
+    }
+}

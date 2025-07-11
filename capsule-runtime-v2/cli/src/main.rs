@@ -2,6 +2,8 @@
 
 mod cli;
 mod commands;
+mod pipeline;
+mod session;
 
 use anyhow::Result;
 use clap::Parser;
@@ -10,12 +12,14 @@ use tracing_subscriber;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // init tracing
+    // Initialize tracing
     tracing_subscriber::fmt::init();
 
-    //TODO: ensure the ~/.capsule directories exist
-    // constants::ensure_dirs()?;
+    // Ensure base directories exist
+    session::SessionManager::ensure_base_directories().await?;
+
+    // Parse and execute commands
     match Cli::parse().cmd {
-        Cmd::Run { program, args } => commands::run_transient(program, args).await,
+        Cmd::Run { program, args } => commands::run_with_pipeline(program, args).await,
     }
 }

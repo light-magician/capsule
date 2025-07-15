@@ -5,6 +5,8 @@
 
 use anyhow::Result;
 use core::events::ProcessEvent;
+use io::StreamCoordinator;
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinSet;
@@ -34,6 +36,28 @@ impl Pipeline {
 
         // Ready synchronization - wait for all tasks to be ready
         let (ready_tx, mut ready_rx) = mpsc::channel::<()>(3);
+
+        // Setup stream coordinator
+        let mut coordinator = StreamCoordinator::new(PathBuf::from(&session_dir));
+        
+        // Add receivers - for now just the strace output
+        coordinator.add_receiver("syscalls.jsonl");
+        
+        // Start all receivers
+        let receiver_handles = coordinator.start_all(
+            tx_raw.subscribe(),
+            self.cancellation_token.clone(),
+        ).await?;
+
+        // Add receiver handles to task set
+        for handle in receiver_handles {
+            self.task_set.spawn(async move {
+                match handle.await {
+                    Ok(result) => result,
+                    Err(e) => Err(anyhow::anyhow!("Receiver task failed: {}", e)),
+                }
+            });
+        }
 
         // Spawn trace task
         self.task_set.spawn(spawn_trace_task(

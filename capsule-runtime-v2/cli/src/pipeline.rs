@@ -188,14 +188,14 @@ async fn spawn_parse_task(
 
 async fn spawn_track_task(
     rx_events: broadcast::Receiver<ProcessEvent>,
-    session_dir: String,
+    _session_dir: String,
     ready_tx: mpsc::Sender<()>,
     cancellation_token: CancellationToken,
 ) -> Result<()> {
-        // Create the tracker and signal ready
-        let tracker = state::ProcessTracker::new(session_dir).await?;
-        ready_tx.send(()).await.map_err(|_| anyhow::anyhow!("Ready channel closed"))?;
-
+        // Create the tracker with shared state
+        // TODO: Extract capsule target from command args
+        let (tracker, _shared_state) = state::ProcessTracker::new(None);
+        
         // Run the tracker
         tracker.run(rx_events, ready_tx, cancellation_token).await
     }

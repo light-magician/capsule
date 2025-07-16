@@ -2,7 +2,7 @@
 members = [ "classify",
   "cli", "core", "enrich", "io", "parse", "report",
   "trace"
-, "track"]
+, "state"]
 
 
 [workspace.dependencies]

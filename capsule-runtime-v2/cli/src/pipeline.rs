@@ -193,7 +193,7 @@ async fn spawn_track_task(
     cancellation_token: CancellationToken,
 ) -> Result<()> {
         // Create the tracker and signal ready
-        let tracker = track::ProcessTracker::new(session_dir).await?;
+        let tracker = state::ProcessTracker::new(session_dir).await?;
         ready_tx.send(()).await.map_err(|_| anyhow::anyhow!("Ready channel closed"))?;
 
         // Run the tracker

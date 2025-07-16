@@ -22,5 +22,5 @@ chrono.workspace = true
 core = { path = "../core" }
 trace = { path = "../trace" }
 parse = { path = "../parse" }
-track = { path = "../track" }
+state = { path = "../state" }
 io = { path = "../io" }

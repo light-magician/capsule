@@ -21,4 +21,13 @@ pub enum Cmd {
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
+    /// monitor live processes in a TUI
+    ///
+    /// Shows real-time process list with keyboard navigation.
+    /// Use arrow keys to navigate, 'r' to refresh, 'q' to quit.
+    Monitor {
+        /// Session ID to monitor (optional, defaults to latest)
+        #[arg(short, long)]
+        session: Option<String>,
+    },
 }

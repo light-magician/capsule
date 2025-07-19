@@ -2,6 +2,8 @@
 
 mod cli;
 mod commands;
+mod ipc;
+mod monitor;
 mod pipeline;
 mod session;
 
@@ -21,5 +23,6 @@ async fn main() -> Result<()> {
     // Parse and execute commands
     match Cli::parse().cmd {
         Cmd::Run { program, args } => commands::run_with_pipeline(program, args).await,
+        Cmd::Monitor { session } => commands::run_monitor(session).await,
     }
 }

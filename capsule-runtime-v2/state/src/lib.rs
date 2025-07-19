@@ -8,7 +8,8 @@ use chrono::Utc;
 use core::events::{ProcessEvent, ProcessEventType};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -149,7 +150,7 @@ impl ProcessTracker {
                 event_result = rx_events.recv() => {
                     match event_result {
                         Ok(process_event) => {
-                            if let Err(e) = self.process_event(process_event) {
+                            if let Err(e) = self.process_event(process_event).await {
                                 eprintln!("Error processing event: {}", e);
                             }
                         },
@@ -169,8 +170,8 @@ impl ProcessTracker {
     }
 
     /// Process a ProcessEvent - update shared state
-    fn process_event(&self, event: ProcessEvent) -> Result<()> {
-        let mut state = self.state.write().unwrap();
+    async fn process_event(&self, event: ProcessEvent) -> Result<()> {
+        let mut state = self.state.write().await;
         
         match event.event_type {
             ProcessEventType::Spawn => {

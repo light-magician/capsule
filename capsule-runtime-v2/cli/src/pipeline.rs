@@ -12,6 +12,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn, error};
+use crate::ipc::{SessionLockManager, StateServer};
 
 pub struct Pipeline {
     cancellation_token: CancellationToken,
@@ -30,12 +31,35 @@ impl Pipeline {
     pub async fn run(&mut self, cmdline: Vec<String>, session_dir: String) -> Result<()> {
         info!("Starting pipeline for command: {:?}", cmdline);
 
+        // Extract session ID from session_dir path
+        let session_id = PathBuf::from(&session_dir)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid session directory"))?
+            .to_string();
+
+        // Create session lock for monitoring
+        let session_lock = SessionLockManager::create_lock(session_id, cmdline.clone()).await?;
+        info!("Created session lock: {}", session_lock.session_id);
+
+        // Create shared state for tracking and monitoring
+        let (tracker, shared_state) = state::ProcessTracker::new(
+            cmdline.first().map(|s| s.clone()) // Use first command as target
+        );
+
+        // Start state server for monitoring
+        let state_server = StateServer::new(&session_lock.socket_path, shared_state.clone()).await?;
+        let state_cancellation = self.cancellation_token.clone();
+        self.task_set.spawn(async move {
+            state_server.run(state_cancellation).await
+        });
+
         // Create broadcast channels for pipeline communication
         let (tx_raw, _) = broadcast::channel::<String>(8192);
         let (tx_events, _) = broadcast::channel::<ProcessEvent>(4096);
 
         // Ready synchronization - wait for all tasks to be ready
-        let (ready_tx, mut ready_rx) = mpsc::channel::<()>(3);
+        let (ready_tx, mut ready_rx) = mpsc::channel::<()>(4); // Increased for state server
 
         // Setup stream coordinator
         let mut coordinator = StreamCoordinator::new(PathBuf::from(&session_dir));
@@ -75,10 +99,10 @@ impl Pipeline {
             self.cancellation_token.clone(),
         ));
 
-        // Spawn track task
+        // Spawn track task with shared state
         self.task_set.spawn(spawn_track_task(
             tx_events.subscribe(),
-            session_dir,
+            tracker,
             ready_tx,
             self.cancellation_token.clone(),
         ));
@@ -119,6 +143,12 @@ impl Pipeline {
                     Err(_) => warn!("Shutdown timeout, some tasks may not have cleaned up"),
                 }
             }
+        }
+
+        // Clean up session lock
+        info!("Cleaning up session lock");
+        if let Err(e) = SessionLockManager::remove_lock().await {
+            warn!("Failed to remove session lock: {}", e);
         }
 
         Ok(())
@@ -188,15 +218,11 @@ async fn spawn_parse_task(
 
 async fn spawn_track_task(
     rx_events: broadcast::Receiver<ProcessEvent>,
-    _session_dir: String,
+    tracker: state::ProcessTracker,
     ready_tx: mpsc::Sender<()>,
     cancellation_token: CancellationToken,
 ) -> Result<()> {
-        // Create the tracker with shared state
-        // TODO: Extract capsule target from command args
-        let (tracker, _shared_state) = state::ProcessTracker::new(None);
-        
-        // Run the tracker
+        // Run the tracker with shared state
         tracker.run(rx_events, ready_tx, cancellation_token).await
     }
 

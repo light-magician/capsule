@@ -30,6 +30,7 @@ impl StraceParser {
     /// Parse strace output line into structured format using comprehensive regex
     pub fn parse_line(line: &str) -> StraceParseResult {
         // Remove "TRACE: " prefix if present
+        // TODO: remove, might be unnecessary now but need to check
         let clean_line = line.strip_prefix("TRACE: ").unwrap_or(line);
 
         // Handle attachment messages

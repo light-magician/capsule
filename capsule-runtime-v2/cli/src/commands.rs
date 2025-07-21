@@ -87,39 +87,33 @@ fn create_demo_state() -> Arc<RwLock<AgentState>> {
     
     // Simulate adding processes
     let demo_processes = vec![
-        ProcessEvent {
-            timestamp: now - 5_000_000, // 5 seconds ago
-            pid: 1234,
-            ppid: 1000,
-            event_type: ProcessEventType::Spawn,
-            command_line: vec!["claude".to_string(), "--version".to_string()],
-            working_dir: Some("/home/user".to_string()),
-            exit_code: None,
-        },
-        ProcessEvent {
-            timestamp: now - 3_000_000, // 3 seconds ago
-            pid: 1235,
-            ppid: 1234,
-            event_type: ProcessEventType::Spawn,
-            command_line: vec!["python3".to_string(), "script.py".to_string()],
-            working_dir: Some("/home/user/project".to_string()),
-            exit_code: None,
-        },
-        ProcessEvent {
-            timestamp: now - 1_000_000, // 1 second ago
-            pid: 1236,
-            ppid: 1234,
-            event_type: ProcessEventType::Spawn,
-            command_line: vec!["git".to_string(), "status".to_string()],
-            working_dir: Some("/home/user/project".to_string()),
-            exit_code: None,
-        },
+        ProcessEvent::exec(
+            now - 5_000_000, // 5 seconds ago
+            1234,
+            1000,
+            vec!["claude".to_string(), "--version".to_string()],
+            Some("/home/user".to_string()),
+        ),
+        ProcessEvent::exec(
+            now - 3_000_000, // 3 seconds ago
+            1235,
+            1234,
+            vec!["python3".to_string(), "script.py".to_string()],
+            Some("/home/user/project".to_string()),
+        ),
+        ProcessEvent::exec(
+            now - 1_000_000, // 1 second ago
+            1236,
+            1234,
+            vec!["git".to_string(), "status".to_string()],
+            Some("/home/user/project".to_string()),
+        ),
     ];
     
     // Process events to populate state
     for event in demo_processes {
         match event.event_type {
-            ProcessEventType::Spawn => {
+            ProcessEventType::Exec => {
                 let name = state::LiveProcess::generate_name(&event.command_line, state.capsule_target.as_deref());
                 let process = state::LiveProcess {
                     pid: event.pid,
@@ -133,11 +127,8 @@ fn create_demo_state() -> Arc<RwLock<AgentState>> {
                 state.processes.insert(event.pid, process);
                 state.active_pids.insert(event.pid);
             }
-            ProcessEventType::Exit => {
-                state.active_pids.remove(&event.pid);
-                if let Some(process) = state.processes.get_mut(&event.pid) {
-                    process.end_time = Some(event.timestamp);
-                }
+            _ => {
+                // Handle other event types if needed
             }
         }
     }

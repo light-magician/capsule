@@ -10,7 +10,7 @@ use crossterm::{
 };
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, List, ListItem, ListState},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 use state::{AgentState, LiveProcess};
 use std::io;
@@ -26,12 +26,16 @@ struct MonitorApp {
     agent_state: Arc<RwLock<AgentState>>,
     /// List selection and scroll state
     list_state: ListState,
+    /// Syscall scroll position (line offset)
+    syscall_scroll: u16,
     /// Whether to quit the app
     should_quit: bool,
     /// Auto-refresh interval
     refresh_rate: Duration,
     /// Last refresh time for auto-update
     last_refresh: Instant,
+    /// Auto-scroll mode for syscalls
+    auto_scroll: bool,
 }
 
 impl MonitorApp {
@@ -40,9 +44,11 @@ impl MonitorApp {
         Self {
             agent_state,
             list_state: ListState::default(),
+            syscall_scroll: 0,
             should_quit: false,
             refresh_rate: Duration::from_millis(500), // 2 FPS refresh
             last_refresh: Instant::now(),
+            auto_scroll: true, // Start with auto-scroll enabled
         }
     }
 
@@ -50,8 +56,30 @@ impl MonitorApp {
     fn handle_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return true,
+            // Process list navigation (left column)
             KeyCode::Up => self.list_state.select_previous(),
             KeyCode::Down => self.list_state.select_next(),
+            // Syscall scrolling (right column)
+            KeyCode::PageUp => {
+                self.auto_scroll = false;
+                self.syscall_scroll = self.syscall_scroll.saturating_sub(10);
+            },
+            KeyCode::PageDown => {
+                self.auto_scroll = false;
+                self.syscall_scroll = self.syscall_scroll.saturating_add(10);
+            },
+            KeyCode::Home => {
+                self.auto_scroll = false;
+                self.syscall_scroll = 0;
+            },
+            KeyCode::End => {
+                self.auto_scroll = true; // Re-enable auto-scroll when going to end
+                self.syscall_scroll = 0; // Will be set to max in draw()
+            },
+            KeyCode::Char(' ') => {
+                // Toggle auto-scroll
+                self.auto_scroll = !self.auto_scroll;
+            },
             KeyCode::Char('r') => self.force_refresh(),
             _ => {}
         }
@@ -77,42 +105,95 @@ impl MonitorApp {
     fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
 
+        // Split into two columns: 33% processes, 67% syscalls
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(33), Constraint::Percentage(67)])
+            .split(area);
+
         // Read current state (non-blocking)
-        let (processes, process_count) = match self.agent_state.try_read() {
+        let (processes, process_count, syscalls) = match self.agent_state.try_read() {
             Ok(state) => {
                 let live_processes = state.live_processes();
                 let count = live_processes.len();
-                let items = create_process_list_items(&live_processes);
-                (items, count)
+                let process_items = create_process_list_items(&live_processes);
+                let syscall_lines: Vec<String> = state.recent_syscalls().into_iter().cloned().collect();
+                (process_items, count, syscall_lines)
             }
             Err(_) => {
                 // State locked, show placeholder
-                (vec![ListItem::new("Loading...")], 0)
+                (vec![ListItem::new("Loading...")], 0, vec![])
             }
         };
 
-        // Create title with count
-        let title = format!(" Live Processes ({} total) ", process_count);
-
-        // Create list widget
-        let list = List::new(processes)
-            .block(Block::default().title(title).borders(Borders::ALL))
+        // Left column: Process list
+        let process_title = format!(" Processes ({}) ", process_count);
+        let process_list = List::new(processes)
+            .block(Block::default().title(process_title).borders(Borders::ALL))
             .highlight_symbol("> ");
+        frame.render_stateful_widget(process_list, chunks[0], &mut self.list_state);
 
-        // Render with state
-        frame.render_stateful_widget(list, area, &mut self.list_state);
+        // Right column: Syscall stream
+        let (syscall_text, _scroll_pos) = if syscalls.is_empty() {
+            ("Waiting for syscalls...".to_string(), 0)
+        } else {
+            // Calculate scroll position
+            let available_height = chunks[1].height.saturating_sub(2) as usize; // Subtract border
+            let total_lines = syscalls.len();
+            
+            let scroll_pos = if self.auto_scroll {
+                // Auto-scroll: show most recent lines
+                if total_lines > available_height {
+                    total_lines.saturating_sub(available_height)
+                } else {
+                    0
+                }
+            } else {
+                // Manual scroll: use scroll position, but clamp to valid range
+                let max_scroll = total_lines.saturating_sub(available_height);
+                std::cmp::min(self.syscall_scroll as usize, max_scroll)
+            };
+            
+            // Extract visible lines
+            let end_idx = std::cmp::min(scroll_pos + available_height, total_lines);
+            let visible_lines = if scroll_pos < total_lines {
+                &syscalls[scroll_pos..end_idx]
+            } else {
+                &[]
+            };
+            
+            (visible_lines.join("\n"), scroll_pos as u16)
+        };
 
-        // Show help at bottom
+        // Update scroll position for display
+        let scroll_indicator = if syscalls.len() > 0 {
+            if self.auto_scroll {
+                " Live Syscalls [AUTO] "
+            } else {
+                " Live Syscalls [MANUAL] "
+            }
+        } else {
+            " Live Syscalls "
+        };
+
+        let syscall_widget = Paragraph::new(syscall_text)
+            .block(Block::default().title(scroll_indicator).borders(Borders::ALL))
+            .wrap(Wrap { trim: true })
+            .scroll((0, 0)); // Scroll is handled manually above
+
+        frame.render_widget(syscall_widget, chunks[1]);
+
+        // Show help at bottom of left column
         let help_area = Rect {
-            x: area.x + 1,
-            y: area.y + area.height - 2,
-            width: area.width - 2,
+            x: chunks[0].x + 1,
+            y: chunks[0].y + chunks[0].height - 2,
+            width: chunks[0].width - 2,
             height: 1,
         };
         
-        let help_text = "Navigation: ↑/↓ arrows, 'r' refresh, 'q' quit";
+        let help_text = "↑/↓ list, PgUp/PgDn scroll, SPACE auto, 'q' quit";
         frame.render_widget(
-            ratatui::widgets::Paragraph::new(help_text),
+            Paragraph::new(help_text),
             help_area,
         );
     }
@@ -274,8 +355,12 @@ struct LiveMonitorApp {
     current_state: Option<AgentState>,
     /// List selection and scroll state
     list_state: ListState,
+    /// Syscall scroll position (line offset)
+    syscall_scroll: u16,
     /// Whether to quit the app
     should_quit: bool,
+    /// Auto-scroll mode for syscalls
+    auto_scroll: bool,
 }
 
 impl LiveMonitorApp {
@@ -283,7 +368,9 @@ impl LiveMonitorApp {
         Self {
             current_state: None,
             list_state: ListState::default(),
+            syscall_scroll: 0,
             should_quit: false,
+            auto_scroll: true,
         }
     }
 
@@ -291,8 +378,30 @@ impl LiveMonitorApp {
     fn handle_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return true,
+            // Process list navigation (left column)
             KeyCode::Up => self.list_state.select_previous(),
             KeyCode::Down => self.list_state.select_next(),
+            // Syscall scrolling (right column)
+            KeyCode::PageUp => {
+                self.auto_scroll = false;
+                self.syscall_scroll = self.syscall_scroll.saturating_sub(10);
+            },
+            KeyCode::PageDown => {
+                self.auto_scroll = false;
+                self.syscall_scroll = self.syscall_scroll.saturating_add(10);
+            },
+            KeyCode::Home => {
+                self.auto_scroll = false;
+                self.syscall_scroll = 0;
+            },
+            KeyCode::End => {
+                self.auto_scroll = true; // Re-enable auto-scroll when going to end
+                self.syscall_scroll = 0; // Will be set to max in draw()
+            },
+            KeyCode::Char(' ') => {
+                // Toggle auto-scroll
+                self.auto_scroll = !self.auto_scroll;
+            },
             _ => {}
         }
         false
@@ -307,48 +416,106 @@ impl LiveMonitorApp {
     fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
 
-        let (processes, process_count) = match &self.current_state {
+        // Split into two columns: 33% processes, 67% syscalls
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(33), Constraint::Percentage(67)])
+            .split(area);
+
+        let (processes, process_count, syscalls) = match &self.current_state {
             Some(state) => {
                 let live_processes = state.live_processes();
                 let count = live_processes.len();
-                let items = create_process_list_items_with_headers(&live_processes);
-                (items, count)
+                let process_items = create_process_list_items_with_headers(&live_processes);
+                let syscall_lines: Vec<String> = state.recent_syscalls().into_iter().cloned().collect();
+                (process_items, count, syscall_lines)
             }
             None => {
                 (vec![
                     ListItem::new("  PID   PPID  NAME         COMMAND"),
                     ListItem::new("  ---   ----  ----         -------"),
                     ListItem::new("  Connecting to session...")
-                ], 0)
+                ], 0, vec![])
             }
         };
 
-        // Create title with count and status
-        let title = if self.current_state.is_some() {
-            format!(" Live Processes ({} total) ", process_count)
+        // Left column: Process list
+        let process_title = if self.current_state.is_some() {
+            format!(" Processes ({}) ", process_count)
         } else {
-            " Live Processes (connecting...) ".to_string()
+            " Processes (connecting...) ".to_string()
         };
 
-        // Create list widget
-        let list = List::new(processes)
-            .block(Block::default().title(title).borders(Borders::ALL))
+        let process_list = List::new(processes)
+            .block(Block::default().title(process_title).borders(Borders::ALL))
             .highlight_symbol("> ");
+        frame.render_stateful_widget(process_list, chunks[0], &mut self.list_state);
 
-        // Render with state
-        frame.render_stateful_widget(list, area, &mut self.list_state);
+        // Right column: Syscall stream
+        let (syscall_text, _scroll_pos) = if syscalls.is_empty() {
+            if self.current_state.is_some() {
+                ("Waiting for syscalls...".to_string(), 0)
+            } else {
+                ("Connecting to session...".to_string(), 0)
+            }
+        } else {
+            // Calculate scroll position
+            let available_height = chunks[1].height.saturating_sub(2) as usize; // Subtract border
+            let total_lines = syscalls.len();
+            
+            let scroll_pos = if self.auto_scroll {
+                // Auto-scroll: show most recent lines
+                if total_lines > available_height {
+                    total_lines.saturating_sub(available_height)
+                } else {
+                    0
+                }
+            } else {
+                // Manual scroll: use scroll position, but clamp to valid range
+                let max_scroll = total_lines.saturating_sub(available_height);
+                std::cmp::min(self.syscall_scroll as usize, max_scroll)
+            };
+            
+            // Extract visible lines
+            let end_idx = std::cmp::min(scroll_pos + available_height, total_lines);
+            let visible_lines = if scroll_pos < total_lines {
+                &syscalls[scroll_pos..end_idx]
+            } else {
+                &[]
+            };
+            
+            (visible_lines.join("\n"), scroll_pos as u16)
+        };
 
-        // Show help at bottom
+        // Update scroll position for display
+        let scroll_indicator = if syscalls.len() > 0 {
+            if self.auto_scroll {
+                " Live Syscalls [AUTO] "
+            } else {
+                " Live Syscalls [MANUAL] "
+            }
+        } else {
+            " Live Syscalls "
+        };
+
+        let syscall_widget = Paragraph::new(syscall_text)
+            .block(Block::default().title(scroll_indicator).borders(Borders::ALL))
+            .wrap(Wrap { trim: true })
+            .scroll((0, 0)); // Scroll is handled manually above
+
+        frame.render_widget(syscall_widget, chunks[1]);
+
+        // Show help at bottom of left column
         let help_area = Rect {
-            x: area.x + 1,
-            y: area.y + area.height - 2,
-            width: area.width - 2,
+            x: chunks[0].x + 1,
+            y: chunks[0].y + chunks[0].height - 2,
+            width: chunks[0].width - 2,
             height: 1,
         };
         
-        let help_text = "Navigation: ↑/↓ arrows, 'q' quit | Live session data";
+        let help_text = "↑/↓ list, PgUp/PgDn scroll, SPACE auto, 'q' quit";
         frame.render_widget(
-            ratatui::widgets::Paragraph::new(help_text),
+            Paragraph::new(help_text),
             help_area,
         );
     }

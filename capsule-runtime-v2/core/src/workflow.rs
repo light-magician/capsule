@@ -113,41 +113,42 @@ impl AgentWorkflow {
     pub fn classify_from_command(command_line: &[String]) -> Option<Self> {
         let executable = command_line.first()?;
         let binary_name = executable.split('/').last().unwrap_or(executable);
-        
+
         match binary_name {
             // Version control operations
             "git" => Some(AgentWorkflow::RepositoryOperations),
-            
+
             // Development tools
             "find" | "grep" | "rg" | "awk" | "sed" | "sort" | "uniq" => {
                 Some(AgentWorkflow::ToolExecution)
             }
-            
+
             // Code execution
             "python" | "python3" | "node" | "ruby" | "php" | "java" => {
                 // If executing a script, it's code execution
-                if command_line.len() > 1 && command_line[1].ends_with(".py") 
-                    || command_line[1].ends_with(".js") 
-                    || command_line[1].ends_with(".rb") {
+                if command_line.len() > 1 && command_line[1].ends_with(".py")
+                    || command_line[1].ends_with(".js")
+                    || command_line[1].ends_with(".rb")
+                {
                     Some(AgentWorkflow::CodeExecution)
                 } else {
                     Some(AgentWorkflow::ToolExecution)
                 }
             }
-            
+
             // System exploration
             "which" | "env" | "ps" | "ls" | "cat" | "head" | "tail" | "file" => {
                 Some(AgentWorkflow::SystemExploration)
             }
-            
+
             // Container operations
             "docker" | "podman" | "kubectl" => Some(AgentWorkflow::ContainerOperation),
-            
+
             // Package management
             "pip" | "npm" | "cargo" | "yarn" | "composer" | "gem" => {
                 Some(AgentWorkflow::PackageManagement)
             }
-            
+
             // Shell coordination
             "sh" | "bash" | "zsh" => {
                 // Analyze the command being executed
@@ -163,7 +164,7 @@ impl AgentWorkflow {
                     Some(AgentWorkflow::ToolExecution)
                 }
             }
-            
+
             _ => None,
         }
     }

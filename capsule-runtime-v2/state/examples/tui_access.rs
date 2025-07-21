@@ -13,9 +13,9 @@ async fn main() {
     // TUI component reads from shared state
     tokio::spawn(async move {
         loop {
-            // Read current state (non-blocking)
+            // Read current state (async)
             {
-                let state = shared_state.read().unwrap();
+                let state = shared_state.read().await;
                 
                 println!("=== Agent State ===");
                 println!("Active processes: {}", state.active_count());

@@ -27,19 +27,65 @@ pub struct ProcessEvent {
 
 /// Process event types we track
 ///
-/// Just Spawn and Exit events at this point
-/// Tracks entire Process lifecycle
+/// Enhanced to track complete process lifecycle and parent-child relationships
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ProcessEventType {
-    /// Process spawned (execve, clone, fork)
-    Spawn,
+    /// Process created via clone/fork (child PID known)
+    Clone { child_pid: u32 },
+    /// Process created via fork (child PID known)
+    Fork { child_pid: u32 },
+    /// Process created via vfork (child PID known)
+    VFork { child_pid: u32 },
+    /// Process executed new program (execve)
+    Exec,
     /// Process exited (exit_group, termination)
     Exit,
+    /// Parent waited for child process (wait4, waitpid)
+    Wait { child_pid: u32, child_exit_code: Option<i32> },
 }
 
 impl ProcessEvent {
-    /// Create a new spawn event
-    pub fn spawn(
+    /// Create a new clone event (parent creates child)
+    pub fn clone(timestamp: u64, parent_pid: u32, child_pid: u32) -> Self {
+        Self {
+            timestamp,
+            pid: parent_pid,
+            ppid: 0, // Will be resolved by state tracker
+            event_type: ProcessEventType::Clone { child_pid },
+            command_line: Vec::new(), // No command line for clone
+            working_dir: None,
+            exit_code: None,
+        }
+    }
+
+    /// Create a new fork event (parent creates child)
+    pub fn fork(timestamp: u64, parent_pid: u32, child_pid: u32) -> Self {
+        Self {
+            timestamp,
+            pid: parent_pid,
+            ppid: 0, // Will be resolved by state tracker
+            event_type: ProcessEventType::Fork { child_pid },
+            command_line: Vec::new(), // No command line for fork
+            working_dir: None,
+            exit_code: None,
+        }
+    }
+
+    /// Create a new vfork event (parent creates child)
+    pub fn vfork(timestamp: u64, parent_pid: u32, child_pid: u32) -> Self {
+        Self {
+            timestamp,
+            pid: parent_pid,
+            ppid: 0, // Will be resolved by state tracker
+            event_type: ProcessEventType::VFork { child_pid },
+            command_line: Vec::new(), // No command line for vfork
+            working_dir: None,
+            exit_code: None,
+        }
+    }
+
+    /// Create a new exec event (process executes new program)
+    pub fn exec(
         timestamp: u64,
         pid: u32,
         ppid: u32,
@@ -50,7 +96,7 @@ impl ProcessEvent {
             timestamp,
             pid,
             ppid,
-            event_type: ProcessEventType::Spawn,
+            event_type: ProcessEventType::Exec,
             command_line,
             working_dir,
             exit_code: None,
@@ -67,6 +113,19 @@ impl ProcessEvent {
             command_line: Vec::new(), // not relevant for exit events
             working_dir: None,
             exit_code,
+        }
+    }
+
+    /// Create a new wait event (parent waits for child)
+    pub fn wait(timestamp: u64, parent_pid: u32, child_pid: u32, child_exit_code: Option<i32>) -> Self {
+        Self {
+            timestamp,
+            pid: parent_pid,
+            ppid: 0, // not relevant for wait events
+            event_type: ProcessEventType::Wait { child_pid, child_exit_code },
+            command_line: Vec::new(), // not relevant for wait events
+            working_dir: None,
+            exit_code: None,
         }
     }
 

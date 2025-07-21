@@ -55,8 +55,17 @@ impl ProcessTree {
     /// update tree with a process event
     pub fn update(&mut self, event: ProcessEvent) -> Result<()> {
         match event.event_type {
-            ProcessEventType::Spawn => self.add_process(event),
+            // All process creation events add processes to the tree
+            ProcessEventType::Clone { .. } | 
+            ProcessEventType::Fork { .. } | 
+            ProcessEventType::VFork { .. } | 
+            ProcessEventType::Exec => self.add_process(event),
+            
+            // Exit events remove processes
             ProcessEventType::Exit => self.remove_process(event.pid, event.exit_code),
+            
+            // Wait events don't directly modify the tree structure
+            ProcessEventType::Wait { .. } => Ok(()),
         }
     }
 

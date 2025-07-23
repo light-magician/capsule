@@ -30,6 +30,9 @@ impl Pipeline {
     /// Run the complete pipeline: trace → parse → track
     pub async fn run(&mut self, cmdline: Vec<String>, session_dir: String) -> Result<()> {
         info!("Starting pipeline for command: {:?}", cmdline);
+        
+        // Initialize debug logging if enabled
+        state::init_debug_logging();
 
         // Extract session ID from session_dir path
         let session_id = PathBuf::from(&session_dir)

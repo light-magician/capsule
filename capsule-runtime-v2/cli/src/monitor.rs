@@ -261,15 +261,15 @@ fn create_process_list_items(processes: &[&LiveProcess]) -> Vec<ListItem<'static
 fn create_process_state_items(processes: &[&state::LiveProcess]) -> Vec<ListItem<'static>> {
     if processes.is_empty() {
         return vec![
-            ListItem::new("  PID   STATE  NAME"),
-            ListItem::new("  ---   -----  ----"),
+            ListItem::new("  PID   PPID  STATE  NAME"),
+            ListItem::new("  ---   ----  -----  ----"),
             ListItem::new("  No processes")
         ];
     }
 
     let mut items = vec![
-        ListItem::new("  PID   STATE  NAME"),
-        ListItem::new("  ---   -----  ----"),
+        ListItem::new("  PID   PPID  STATE  NAME"),
+        ListItem::new("  ---   ----  -----  ----"),
     ];
 
     for process in processes {
@@ -281,15 +281,16 @@ fn create_process_state_items(processes: &[&state::LiveProcess]) -> Vec<ListItem
         };
 
         // Use process name, truncate if needed
-        let name = if process.name.len() > 20 {
-            format!("{}...", &process.name[..17])
+        let name = if process.name.len() > 16 {
+            format!("{}...", &process.name[..13])
         } else {
             process.name.clone()
         };
 
         let line = format!(
-            "{:>5}   {}  {}",
+            "{:>5} {:>5}   {}  {}",
             process.pid,
+            process.ppid,
             state_str,
             name
         );
@@ -432,8 +433,8 @@ impl LiveMonitorApp {
             }
             None => {
                 (vec![
-                    ListItem::new("  PID   STATE  NAME"),
-                    ListItem::new("  ---   -----  ----"),
+                    ListItem::new("  PID   PPID  STATE  NAME"),
+                    ListItem::new("  ---   ----  -----  ----"),
                     ListItem::new("  Connecting to session...")
                 ], 0, vec![])
             }

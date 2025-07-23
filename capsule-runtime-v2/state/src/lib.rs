@@ -14,6 +14,17 @@ use tokio::sync::RwLock;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
+/// Process state for lifecycle tracking
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ProcessState {
+    /// Process created but waiting for execve
+    Spawning,
+    /// Process actively running with command
+    Active, 
+    /// Process has exited
+    Exited,
+}
+
 /// Live process information for TUI display
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LiveProcess {
@@ -23,6 +34,7 @@ pub struct LiveProcess {
     pub command_line: Vec<String>,
     pub start_time: u64,
     pub end_time: Option<u64>,
+    pub state: ProcessState,
 }
 
 /// Shared agent state - single source of truth
@@ -131,6 +143,31 @@ impl AgentState {
         processes.sort_by_key(|process| process.pid);
         processes
     }
+    
+    /// Get all processes sorted by state (Active first), then PID
+    /// Shows ALL processes including exited ones for debugging
+    pub fn processes_by_state(&self) -> Vec<&LiveProcess> {
+        // Get ALL processes, not just active ones
+        let mut processes: Vec<&LiveProcess> = self.processes.values().collect();
+        
+        // Sort by state priority (Active > Spawning > Exited), then by PID
+        processes.sort_by(|a, b| {
+            let state_order_a = match a.state {
+                ProcessState::Active => 0,
+                ProcessState::Spawning => 1, 
+                ProcessState::Exited => 2,
+            };
+            let state_order_b = match b.state {
+                ProcessState::Active => 0,
+                ProcessState::Spawning => 1,
+                ProcessState::Exited => 2,  
+            };
+            
+            state_order_a.cmp(&state_order_b).then(a.pid.cmp(&b.pid))
+        });
+        
+        processes
+    }
 
     /// Get process by PID
     pub fn get_process(&self, pid: u32) -> Option<&LiveProcess> {
@@ -145,6 +182,65 @@ impl AgentState {
     /// Count of active processes
     pub fn active_count(&self) -> usize {
         self.active_pids.len()
+    }
+    
+    /// Get processes in tree order with indentation for TUI display
+    pub fn tree_processes(&self) -> Vec<(u32, String, &LiveProcess)> {
+        let mut tree_items = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        
+        // First, find root processes (PPID = 0 or parent not in our process list)
+        let mut roots: Vec<&LiveProcess> = self.processes.values()
+            .filter(|p| p.ppid == 0 || !self.processes.contains_key(&p.ppid))
+            .collect();
+        roots.sort_by_key(|p| p.pid);
+        
+        // Build tree recursively for each root
+        for root in roots {
+            self.build_tree_recursive(root, 0, &mut tree_items, &mut visited);
+        }
+        
+        tree_items
+    }
+    
+    fn build_tree_recursive<'a>(
+        &'a self,
+        process: &'a LiveProcess,
+        depth: u32,
+        tree_items: &mut Vec<(u32, String, &'a LiveProcess)>,
+        visited: &mut std::collections::HashSet<u32>,
+    ) {
+        if visited.contains(&process.pid) {
+            return; // Avoid cycles
+        }
+        visited.insert(process.pid);
+        
+        // Generate indent string
+        let indent = if depth == 0 {
+            String::new()
+        } else {
+            let mut indent = String::new();
+            for i in 0..depth {
+                if i == depth - 1 {
+                    indent.push_str("├");
+                } else {
+                    indent.push_str("│ ");
+                }
+            }
+            indent
+        };
+        
+        tree_items.push((depth, indent, process));
+        
+        // Find and add children
+        let mut children: Vec<&LiveProcess> = self.processes.values()
+            .filter(|p| p.ppid == process.pid && p.pid != process.pid) // Avoid self-reference
+            .collect();
+        children.sort_by_key(|p| p.pid);
+        
+        for child in children.iter() {
+            self.build_tree_recursive(child, depth + 1, tree_items, visited);
+        }
     }
 }
 
@@ -253,15 +349,21 @@ impl ProcessTracker {
         event: &ProcessEvent,
         creation_type: &str
     ) -> Result<()> {
-        // Create a placeholder process for the child
-        let child_name = format!("{}:{}", creation_type, child_pid);
+        // Get parent name for better child naming
+        let parent_name = state.processes.get(&parent_pid)
+            .map(|p| p.name.as_str())
+            .unwrap_or("unknown");
+            
+        // Create a placeholder process for the child with parent context
+        let child_name = format!("{}:{}", creation_type, parent_name);
         let child_process = LiveProcess {
             pid: child_pid,
             ppid: parent_pid,
             name: child_name,
-            command_line: vec![creation_type.to_string()], // Temporary until execve
+            command_line: vec![format!("{}:{}", creation_type, parent_name)], // Temporary until execve
             start_time: event.timestamp,
             end_time: None,
+            state: ProcessState::Spawning, // Waiting for execve
         };
 
         // Add child to processes and active PIDs
@@ -269,11 +371,10 @@ impl ProcessTracker {
         state.active_pids.insert(child_pid);
         
         // Update parent's PPID if we know it now
-        if let Some(parent_process) = state.processes.get_mut(&parent_pid) {
+        if let Some(_parent_process) = state.processes.get_mut(&parent_pid) {
             // Parent might have had PPID=0, but now we can establish the relationship
         }
 
-        eprintln!("Process {} created child {} via {}", parent_pid, child_pid, creation_type);
         Ok(())
     }
 
@@ -282,10 +383,15 @@ impl ProcessTracker {
         let name = LiveProcess::generate_name(&event.command_line, state.capsule_target.as_deref());
         
         if let Some(existing_process) = state.processes.get_mut(&event.pid) {
+            // Capture old state before updating
+            let old_state = existing_process.state.clone();
+            
             // Update existing process (from clone/fork) with real command line
             existing_process.name = name;
             existing_process.command_line = event.command_line.clone();
-            eprintln!("Updated process {} with execve: {:?}", event.pid, event.command_line);
+            existing_process.state = ProcessState::Active; // Now actively running
+            
+            // Process updated from clone/fork to active execution
         } else {
             // New process we haven't seen before (direct execve)
             let process = LiveProcess {
@@ -295,11 +401,11 @@ impl ProcessTracker {
                 command_line: event.command_line.clone(),
                 start_time: event.timestamp,
                 end_time: None,
+                state: ProcessState::Active, // Directly active
             };
 
             state.processes.insert(event.pid, process);
             state.active_pids.insert(event.pid);
-            eprintln!("New process {} via direct execve: {:?}", event.pid, event.command_line);
         }
 
         Ok(())
@@ -319,10 +425,10 @@ impl ProcessTracker {
         state.recent_exits.insert(event.pid, event.timestamp);
         state.active_pids.remove(&event.pid);
 
-        // Update process end time
+        // Update process end time and state
         if let Some(process) = state.processes.get_mut(&event.pid) {
             process.end_time = Some(event.timestamp);
-            eprintln!("Process {} exited with code {:?}", event.pid, event.exit_code);
+            process.state = ProcessState::Exited;
         }
 
         Ok(())
@@ -337,9 +443,8 @@ impl ProcessTracker {
         child_exit_code: Option<i32>,
         _event: &ProcessEvent
     ) -> Result<()> {
-        // For now, just log the wait event
+        // For now, just track the wait event
         // In the future, this could be used for more sophisticated parent-child relationship tracking
-        eprintln!("Process {} waited for child {} (exit code: {:?})", parent_pid, child_pid, child_exit_code);
         Ok(())
     }
 

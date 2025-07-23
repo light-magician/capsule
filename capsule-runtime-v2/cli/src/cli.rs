@@ -30,4 +30,9 @@ pub enum Cmd {
         #[arg(short, long)]
         session: Option<String>,
     },
+    /// demo TUI with sample data
+    ///
+    /// Shows the monitoring TUI with demo processes and syscalls
+    /// for testing the display without running a real session.
+    Demo,
 }

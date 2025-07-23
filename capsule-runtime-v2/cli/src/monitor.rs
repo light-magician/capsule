@@ -114,9 +114,9 @@ impl MonitorApp {
         // Read current state (non-blocking)
         let (processes, process_count, syscalls) = match self.agent_state.try_read() {
             Ok(state) => {
-                let live_processes = state.live_processes();
-                let count = live_processes.len();
-                let process_items = create_process_list_items(&live_processes);
+                let sorted_processes = state.processes_by_state();
+                let count = sorted_processes.len();
+                let process_items = create_process_state_items(&sorted_processes);
                 let syscall_lines: Vec<String> = state.recent_syscalls().into_iter().cloned().collect();
                 (process_items, count, syscall_lines)
             }
@@ -257,41 +257,41 @@ fn create_process_list_items(processes: &[&LiveProcess]) -> Vec<ListItem<'static
     items
 }
 
-/// Convert processes to list items with headers (for live monitor)
-fn create_process_list_items_with_headers(processes: &[&LiveProcess]) -> Vec<ListItem<'static>> {
+/// Convert processes to list items with state and command info
+fn create_process_state_items(processes: &[&state::LiveProcess]) -> Vec<ListItem<'static>> {
     if processes.is_empty() {
         return vec![
-            ListItem::new("  PID   PPID  NAME         COMMAND"),
-            ListItem::new("  ---   ----  ----         -------"),
-            ListItem::new("  No active processes")
+            ListItem::new("  PID   STATE  NAME"),
+            ListItem::new("  ---   -----  ----"),
+            ListItem::new("  No processes")
         ];
     }
 
     let mut items = vec![
-        ListItem::new("  PID   PPID  NAME         COMMAND"),
-        ListItem::new("  ---   ----  ----         -------"),
+        ListItem::new("  PID   STATE  NAME"),
+        ListItem::new("  ---   -----  ----"),
     ];
 
     for process in processes {
-        let command = if process.command_line.len() > 1 {
-            process.command_line.join(" ")
-        } else {
-            process.command_line.first().cloned().unwrap_or_default()
+        // Format state as short tag
+        let state_str = match process.state {
+            state::ProcessState::Spawning => "spawn",
+            state::ProcessState::Active => "run  ", 
+            state::ProcessState::Exited => "exit ",
         };
-        
-        // Truncate long commands  
-        let command = if command.len() > 40 {
-            format!("{}...", &command[..37])
+
+        // Use process name, truncate if needed
+        let name = if process.name.len() > 20 {
+            format!("{}...", &process.name[..17])
         } else {
-            command
+            process.name.clone()
         };
 
         let line = format!(
-            "{:>5} {:>5} {:12} {}",
+            "{:>5}   {}  {}",
             process.pid,
-            process.ppid,
-            process.name,
-            command
+            state_str,
+            name
         );
 
         items.push(ListItem::new(line));
@@ -424,16 +424,16 @@ impl LiveMonitorApp {
 
         let (processes, process_count, syscalls) = match &self.current_state {
             Some(state) => {
-                let live_processes = state.live_processes();
-                let count = live_processes.len();
-                let process_items = create_process_list_items_with_headers(&live_processes);
+                let sorted_processes = state.processes_by_state();
+                let count = sorted_processes.len();
+                let process_items = create_process_state_items(&sorted_processes);
                 let syscall_lines: Vec<String> = state.recent_syscalls().into_iter().cloned().collect();
                 (process_items, count, syscall_lines)
             }
             None => {
                 (vec![
-                    ListItem::new("  PID   PPID  NAME         COMMAND"),
-                    ListItem::new("  ---   ----  ----         -------"),
+                    ListItem::new("  PID   STATE  NAME"),
+                    ListItem::new("  ---   -----  ----"),
                     ListItem::new("  Connecting to session...")
                 ], 0, vec![])
             }

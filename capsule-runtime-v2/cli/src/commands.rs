@@ -5,7 +5,8 @@ use anyhow::Result;
 use tracing::{info, error};
 use crate::{ipc::SessionLockManager, monitor, pipeline::Pipeline, session::{SessionManager, SessionStatus}};
 use state::AgentState;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Run program with full pipeline: trace → parse → track
 pub async fn run_with_pipeline(program: String, args: Vec<String>) -> Result<()> {
@@ -77,8 +78,19 @@ pub async fn run_monitor(_session: Option<String>) -> Result<()> {
     Ok(())
 }
 
+/// Run a demo TUI for testing the display
+pub async fn run_demo_tui() -> Result<()> {
+    info!("Starting demo TUI...");
+    
+    // Create demo state
+    let demo_state = create_demo_state();
+    
+    // Run the monitor TUI with demo state
+    monitor::run_monitor(demo_state).await
+}
+
 /// Create demo state for testing the TUI
-fn create_demo_state() -> Arc<RwLock<AgentState>> {
+pub fn create_demo_state() -> Arc<RwLock<AgentState>> {
     let mut state = AgentState::new(Some("claude".to_string()));
     
     // Add some demo processes
@@ -122,6 +134,7 @@ fn create_demo_state() -> Arc<RwLock<AgentState>> {
                     command_line: event.command_line,
                     start_time: event.timestamp,
                     end_time: None,
+                    state: state::ProcessState::Active, // Demo processes are active
                 };
                 
                 state.processes.insert(event.pid, process);
@@ -132,6 +145,13 @@ fn create_demo_state() -> Arc<RwLock<AgentState>> {
             }
         }
     }
+    
+    // Add some demo syscalls
+    state.add_syscall("execve(\"/usr/bin/claude\", [\"claude\", \"--version\"], 0x7fff5fbff7b0 /* 67 vars */) = 0".to_string());
+    state.add_syscall("write(1, \"Claude Code v1.0\\n\", 16) = 16".to_string());
+    state.add_syscall("openat(AT_FDCWD, \"/home/user/project/script.py\", O_RDONLY) = 3".to_string());
+    state.add_syscall("read(3, \"#!/usr/bin/env python3\\n\", 4096) = 256".to_string());
+    state.add_syscall("clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f123456) = 1235".to_string());
     
     state.last_updated = now;
     Arc::new(RwLock::new(state))

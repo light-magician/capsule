@@ -1,12 +1,16 @@
-
 //! Command implementations for capsule CLI
 
+use crate::{
+    ipc::SessionLockManager,
+    monitor,
+    pipeline::Pipeline,
+    session::{SessionManager, SessionStatus},
+};
 use anyhow::Result;
-use tracing::{info, error};
-use crate::{ipc::SessionLockManager, monitor, pipeline::Pipeline, session::{SessionManager, SessionStatus}};
 use state::AgentState;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::{error, info};
 
 /// Run program with full pipeline: trace → parse → track
 pub async fn run_with_pipeline(program: String, args: Vec<String>) -> Result<()> {
@@ -19,8 +23,11 @@ pub async fn run_with_pipeline(program: String, args: Vec<String>) -> Result<()>
     // Create session directory and metadata
     let mut session_metadata = SessionManager::create_session(cmdline.clone()).await?;
     let session_dir = SessionManager::session_dir_string(&session_metadata);
-    
-    info!("Created session: {} at {}", session_metadata.session_id, session_dir);
+
+    info!(
+        "Created session: {} at {}",
+        session_metadata.session_id, session_dir
+    );
 
     // Create and run the pipeline
     let mut pipeline = Pipeline::new();
@@ -29,9 +36,12 @@ pub async fn run_with_pipeline(program: String, args: Vec<String>) -> Result<()>
     // Update session status based on result
     let final_status = match &result {
         Ok(()) => {
-            info!("Session completed successfully: {}", session_metadata.session_id);
+            info!(
+                "Session completed successfully: {}",
+                session_metadata.session_id
+            );
             SessionStatus::Completed
-        },
+        }
         Err(e) => {
             error!("Session failed: {} - {}", session_metadata.session_id, e);
             SessionStatus::Failed(e.to_string())
@@ -47,11 +57,14 @@ pub async fn run_with_pipeline(program: String, args: Vec<String>) -> Result<()>
 /// Run monitor TUI to show live processes
 pub async fn run_monitor(_session: Option<String>) -> Result<()> {
     info!("Checking for active session...");
-    
+
     // Check for active session
     let session_lock = match SessionLockManager::get_active_session().await {
         Ok(lock) => {
-            info!("Found active session: {} (PID {})", lock.session_id, lock.pid);
+            info!(
+                "Found active session: {} (PID {})",
+                lock.session_id, lock.pid
+            );
             lock
         }
         Err(e) => {
@@ -61,7 +74,7 @@ pub async fn run_monitor(_session: Option<String>) -> Result<()> {
             return Ok(());
         }
     };
-    
+
     // Connect to the session's state
     info!("Connecting to session state socket...");
     match monitor::run_monitor_live(&session_lock.socket_path).await {
@@ -74,17 +87,17 @@ pub async fn run_monitor(_session: Option<String>) -> Result<()> {
             println!("The session may have ended or crashed.");
         }
     }
-    
+
     Ok(())
 }
 
 /// Run a demo TUI for testing the display
 pub async fn run_demo_tui() -> Result<()> {
     info!("Starting demo TUI...");
-    
+
     // Create demo state
     let demo_state = create_demo_state();
-    
+
     // Run the monitor TUI with demo state
     monitor::run_monitor(demo_state).await
 }
@@ -92,11 +105,11 @@ pub async fn run_demo_tui() -> Result<()> {
 /// Create demo state for testing the TUI
 pub fn create_demo_state() -> Arc<RwLock<AgentState>> {
     let mut state = AgentState::new(Some("claude".to_string()));
-    
+
     // Add some demo processes
     use core::events::{ProcessEvent, ProcessEventType};
     let now = chrono::Utc::now().timestamp_micros() as u64;
-    
+
     // Simulate adding processes
     let demo_processes = vec![
         ProcessEvent::exec(
@@ -121,12 +134,15 @@ pub fn create_demo_state() -> Arc<RwLock<AgentState>> {
             Some("/home/user/project".to_string()),
         ),
     ];
-    
+
     // Process events to populate state
     for event in demo_processes {
         match event.event_type {
             ProcessEventType::Exec => {
-                let name = state::LiveProcess::generate_name(&event.command_line, state.capsule_target.as_deref());
+                let name = state::LiveProcess::generate_name(
+                    &event.command_line,
+                    state.capsule_target.as_deref(),
+                );
                 let process = state::LiveProcess {
                     pid: event.pid,
                     ppid: event.ppid,
@@ -136,7 +152,7 @@ pub fn create_demo_state() -> Arc<RwLock<AgentState>> {
                     end_time: None,
                     state: state::ProcessState::Active, // Demo processes are active
                 };
-                
+
                 state.processes.insert(event.pid, process);
                 state.active_pids.insert(event.pid);
             }
@@ -145,75 +161,16 @@ pub fn create_demo_state() -> Arc<RwLock<AgentState>> {
             }
         }
     }
-    
+
     // Add some demo syscalls
     state.add_syscall("execve(\"/usr/bin/claude\", [\"claude\", \"--version\"], 0x7fff5fbff7b0 /* 67 vars */) = 0".to_string());
     state.add_syscall("write(1, \"Claude Code v1.0\\n\", 16) = 16".to_string());
-    state.add_syscall("openat(AT_FDCWD, \"/home/user/project/script.py\", O_RDONLY) = 3".to_string());
+    state.add_syscall(
+        "openat(AT_FDCWD, \"/home/user/project/script.py\", O_RDONLY) = 3".to_string(),
+    );
     state.add_syscall("read(3, \"#!/usr/bin/env python3\\n\", 4096) = 256".to_string());
     state.add_syscall("clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f123456) = 1235".to_string());
-    
+
     state.last_updated = now;
     Arc::new(RwLock::new(state))
-}
-
-/// Legacy run command for backwards compatibility (kept for reference)
-#[allow(dead_code)]
-pub async fn run_transient(program: String, args: Vec<String>) -> Result<()> {
-    use tokio::sync::broadcast;
-    use tokio_util::sync::CancellationToken;
-
-    // build command line 
-    let mut cmdline = vec![program];
-    cmdline.extend(args);
-
-    // create cancellation token for graceful shutdown
-    let cancellation_token = CancellationToken::new();
-
-    // create the broadcast channel for strace output
-    let (tx_raw, mut rx_raw) = broadcast::channel::<String>(1024);
- 
-    // setup the Ctrl + C handler
-    let cancellation_token_ctrlc = cancellation_token.clone();
-    // setup closure to always listen for cancellation token 
-    tokio::spawn(async move {
-        if let Ok(()) = tokio::signal::ctrl_c().await {
-            tracing::info!("received Ctrl+C, shutting down...");
-            cancellation_token_ctrlc.cancel();
-        }
-    });
-
-    // start the tracer
-    let tracer_task = tokio::spawn(async move {
-        trace::LinuxTracer::run_with_cancellation(
-            cmdline,
-            tx_raw,
-            cancellation_token,
-        ).await
-    });
-
-    // simple output handler for now - just print the trace lines
-    let output_task = tokio::spawn(async move {
-        while let Ok(line) = rx_raw.recv().await {
-            println!("TRACE: {}", line);
-        }
-    });
-
-    // Wait for both tasks to complete
-    let (tracer_result, _) = tokio::join!(tracer_task, output_task);
-
-    match tracer_result {
-          Ok(Ok(())) => {
-              tracing::info!("Tracing completed successfully");
-              Ok(())
-          },
-          Ok(Err(e)) => {
-              tracing::error!("Tracer error: {}", e);
-              Err(e)
-          },
-          Err(e) => {
-              tracing::error!("Task join error: {}", e);
-              Err(e.into())
-          }
-      }
 }

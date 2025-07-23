@@ -1,6 +1,6 @@
 [workspace]
-members = [ "classify",
-  "cli", "core", "enrich", "io", "parse", "report",
+members = [ 
+  "cli", "core", "io", "parse", 
   "trace"
 , "state"]
 

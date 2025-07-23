@@ -1,6 +1,0 @@
-[package]
-name = "report"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]

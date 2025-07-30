@@ -12,6 +12,14 @@ Capsule Runtime V2 provides real-time process monitoring and analysis through ke
 cargo install --path cli --force
 ```
 
+### Tests and Validation
+
+```bash
+cargo test
+cargo test -p parse
+cargo check -p parse
+```
+
 ### Usage
 
 ```bash
@@ -28,12 +36,14 @@ capsule demo
 ## Features
 
 ### Live Process Monitoring
+
 - Real-time TUI with process list and syscall stream
 - Process state tracking (Spawning → Active → Exited)
 - Keyboard navigation and auto-scroll controls
 - Session management with persistent state
 
 ### Syscall Analysis
+
 - Comprehensive parsing of process lifecycle events
 - Real-time risk analysis and security monitoring
 - Multi-stream logging (syscalls, events, risks)

@@ -1,25 +1,17 @@
-//! Strace output parsing to structured events
+//! Strace output parsing to universal syscall events
 //!
-//! Converts raw strace lines into StraceEvent structs for downstream processing.
+//! Converts raw strace lines into SyscallEvent structs for downstream processing.
+//! All syscalls are parsed and emitted - no filtering at this layer.
 
+use core::SyscallEvent;
+use chrono;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StraceEvent {
-    pub pid: u32,
-    pub timestamp: String,
-    pub syscall: String,
-    pub args: String,
-    pub result: Option<String>,
-    pub is_complete: bool,
-    pub raw_line: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StraceParseResult {
-    Event(StraceEvent),
+    Event(SyscallEvent),
     Attachment(String), // "strace: Process 2438 attached"
     Unparseable(String),
 }
@@ -27,7 +19,8 @@ pub enum StraceParseResult {
 pub struct StraceParser;
 
 impl StraceParser {
-    /// Parse strace output line into structured format using comprehensive regex
+    /// Parse strace output line into SyscallEvent using comprehensive regex
+    /// Parses ALL syscalls, no filtering at this layer
     pub fn parse_line(line: &str) -> StraceParseResult {
         // Remove "TRACE: " prefix if present
         // TODO: remove, might be unnecessary now but need to check
@@ -51,62 +44,53 @@ impl StraceParser {
                 .and_then(|m| m.as_str().parse::<u32>().ok())
                 .unwrap_or(0);
 
-            let timestamp = captures
+            let timestamp_str = captures
                 .name("timestamp")
-                .map(|m| m.as_str().to_string())
-                .unwrap_or_default();
+                .map(|m| m.as_str())
+                .unwrap_or("");
+            
+            // Convert timestamp to microseconds since epoch
+            // For now, use current time - proper timestamp parsing can be added later
+            let timestamp = chrono::Utc::now().timestamp_micros() as u64;
 
-            let syscall = captures
+            let syscall_name = captures
                 .name("syscall")
                 .map(|m| m.as_str().to_string())
                 .unwrap_or_default();
 
-            let args = captures
+            let args_str = captures
                 .name("args")
-                .map(|m| m.as_str().to_string())
-                .unwrap_or_default();
+                .map(|m| m.as_str())
+                .unwrap_or("");
+            
+            // Parse args into vector - simple comma split for now
+            // More sophisticated parsing can be added later per syscall type
+            let args = if args_str.is_empty() {
+                Vec::new()
+            } else {
+                args_str.split(',').map(|s| s.trim().to_string()).collect()
+            };
 
             let result = captures
                 .name("result")
                 .map(|m| m.as_str().trim().to_string())
                 .filter(|s| !s.is_empty());
 
-            // Syscall is complete if we have a result and it's not unfinished
-            let is_complete = result.is_some() && !clean_line.contains("<unfinished");
-
-            StraceParseResult::Event(StraceEvent {
+            let syscall_event = SyscallEvent::new(
                 pid,
                 timestamp,
-                syscall,
+                syscall_name,
                 args,
                 result,
-                is_complete,
-                raw_line: line.to_string(),
-            })
+                line.to_string(),
+            );
+
+            StraceParseResult::Event(syscall_event)
         } else {
             StraceParseResult::Unparseable(line.to_string())
         }
     }
 
-    /// determines if syscall is a process event (process control related)
-    /// a process control related event is one that signifies program execution,
-    /// new processes starting, processes exiting, and processes waiting
-    /// supported:
-    ///     execve: execute a program
-    ///     fork: clone parent process and start new child process
-    ///     vfork: fork that shares parent mem and suspends parent
-    ///            execution. Faster but less safe than fork because
-    ///            of uninitended consequences of shared mem w parent
-    ///     exit_group: terminates all threads in a process group
-    ///     wait4: waits for child process state changes with resource
-    ///            usage. (does more than wait basically)
-    ///     wiatpid: waits for specific child process state changes
-    pub fn is_process_event(syscall: &str) -> bool {
-        matches!(
-            syscall,
-            "execve" | "clone" | "fork" | "vfork" | "exit_group" | "wait4" | "waitpid"
-        )
-    }
 }
 
 #[cfg(test)]
@@ -120,9 +104,10 @@ mod tests {
 
         if let StraceParseResult::Event(event) = result {
             assert_eq!(event.pid, 2427);
-            assert_eq!(event.syscall, "clone");
+            assert_eq!(event.syscall_name, "clone");
             assert_eq!(event.result, Some("2438".to_string()));
-            assert!(event.is_complete);
+            assert_eq!(event.args.len(), 2); // child_stack=NULL, flags=CLONE_CHILD_CLEARTID
+            assert_eq!(event.raw_line, line);
         } else {
             panic!("Expected Event result");
         }
@@ -135,8 +120,9 @@ mod tests {
 
         if let StraceParseResult::Event(event) = result {
             assert_eq!(event.pid, 2441);
-            assert_eq!(event.syscall, "execve");
-            assert!(!event.is_complete);
+            assert_eq!(event.syscall_name, "execve");
+            assert_eq!(event.result, None); // unfinished, so no result
+            assert!(event.args.len() > 0); // Should have parsed some args
         } else {
             panic!("Expected Event result");
         }

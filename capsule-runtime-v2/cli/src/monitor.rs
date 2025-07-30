@@ -276,7 +276,9 @@ fn create_process_state_items(processes: &[&state::LiveProcess]) -> Vec<ListItem
         // Format state as short tag
         let state_str = match process.state {
             state::ProcessState::Spawning => "spawn",
-            state::ProcessState::Active => "run  ", 
+            state::ProcessState::Active => "run  ",
+            state::ProcessState::Waiting => "wait ",
+            state::ProcessState::Exiting => "exit>",
             state::ProcessState::Exited => "exit ",
         };
 

@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use chrono::Utc;
-use core::events::{ProcessEvent, ProcessEventType};
+use core::{SyscallEvent, SyscallCategory, ProcessSyscall, ProcessEvent, ProcessEventType, DomainEvent};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -402,6 +402,131 @@ impl ProcessTracker {
         Ok(())
     }
 
+    /// Main tracking loop for SyscallEvent stream - NEW INTERFACE
+    pub async fn run_syscall(
+        self,
+        mut rx_syscalls: broadcast::Receiver<SyscallEvent>,
+        ready_tx: mpsc::Sender<()>,
+        cancellation_token: CancellationToken,
+    ) -> Result<()> {
+        // Signal ready
+        ready_tx.send(()).await?;
+
+        loop {
+            tokio::select! {
+                syscall_result = rx_syscalls.recv() => {
+                    match syscall_result {
+                        Ok(syscall_event) => {
+                            if let Err(e) = self.process_syscall_event(syscall_event).await {
+                                eprintln!("Error processing syscall event: {}", e);
+                            }
+                        },
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            eprintln!("Syscall tracker lagged by {} events", n);
+                        },
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                },
+                _ = cancellation_token.cancelled() => {
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Process a SyscallEvent - categorize and convert to domain events as needed
+    async fn process_syscall_event(&self, syscall_event: SyscallEvent) -> Result<()> {
+        // Always add raw syscall to buffer for TUI display
+        {
+            let mut state = self.state.write().await;
+            state.add_syscall(syscall_event.raw_line.clone());
+        }
+
+        // Categorize the syscall
+        let category = syscall_event.categorize();
+        
+        // Handle process events - convert to ProcessEvent and process
+        if let SyscallCategory::Process(process_syscall) = category {
+            if let Some(process_event) = self.convert_to_process_event(&syscall_event, &process_syscall) {
+                self.process_event(process_event).await?;
+            }
+        }
+        
+        // Future: Handle other domain events (FileIo, Network, etc.)
+        // For now, we just log them or ignore them
+        
+        Ok(())
+    }
+
+    /// Convert SyscallEvent to ProcessEvent for process-related syscalls
+    fn convert_to_process_event(&self, syscall_event: &SyscallEvent, process_syscall: &ProcessSyscall) -> Option<ProcessEvent> {
+        match process_syscall {
+            ProcessSyscall::Execve => {
+                // Parse command line from execve arguments
+                let command_line = self.parse_execve_syscall(&syscall_event.args, syscall_event.result.as_deref())
+                    .unwrap_or_else(|| vec!["execve".to_string()]);
+
+                Some(ProcessEvent::exec(
+                    syscall_event.timestamp,
+                    syscall_event.pid,
+                    0, // PPID will be resolved by state tracker
+                    command_line,
+                    None, // Working directory not available from strace
+                ))
+            },
+            ProcessSyscall::Clone => {
+                // Parse child PID from return value
+                if let Some(child_pid) = self.parse_clone_result(syscall_event.result.as_deref()) {
+                    Some(ProcessEvent::clone(syscall_event.timestamp, syscall_event.pid, child_pid))
+                } else {
+                    None // Invalid clone - no child PID
+                }
+            },
+            ProcessSyscall::Fork => {
+                // Parse child PID from return value
+                if let Some(child_pid) = self.parse_fork_result(syscall_event.result.as_deref()) {
+                    Some(ProcessEvent::fork(syscall_event.timestamp, syscall_event.pid, child_pid))
+                } else {
+                    None // Invalid fork - no child PID
+                }
+            },
+            ProcessSyscall::VFork => {
+                // Parse child PID from return value
+                if let Some(child_pid) = self.parse_vfork_result(syscall_event.result.as_deref()) {
+                    Some(ProcessEvent::vfork(syscall_event.timestamp, syscall_event.pid, child_pid))
+                } else {
+                    None // Invalid vfork - no child PID
+                }
+            },
+            ProcessSyscall::ExitGroup => {
+                // Parse exit code from result
+                let exit_code = syscall_event.result
+                    .as_ref()
+                    .and_then(|r| r.parse::<i32>().ok());
+
+                Some(ProcessEvent::exit(syscall_event.timestamp, syscall_event.pid, exit_code))
+            },
+            ProcessSyscall::Wait4 => {
+                // Parse child PID and exit code from arguments and result
+                if let Some((child_pid, child_exit_code)) = self.parse_wait4_syscall(&syscall_event.args, syscall_event.result.as_deref()) {
+                    Some(ProcessEvent::wait(syscall_event.timestamp, syscall_event.pid, child_pid, child_exit_code))
+                } else {
+                    None // Invalid wait4 - couldn't parse
+                }
+            },
+            ProcessSyscall::WaitPid => {
+                // Parse child PID and exit code from arguments and result
+                if let Some((child_pid, child_exit_code)) = self.parse_waitpid_syscall(&syscall_event.args, syscall_event.result.as_deref()) {
+                    Some(ProcessEvent::wait(syscall_event.timestamp, syscall_event.pid, child_pid, child_exit_code))
+                } else {
+                    None // Invalid waitpid - couldn't parse
+                }
+            },
+        }
+    }
+
     /// Process a ProcessEvent - update shared state
     async fn process_event(&self, event: ProcessEvent) -> Result<()> {
         let mut state = self.state.write().await;
@@ -675,5 +800,140 @@ impl ProcessTracker {
                 Err(anyhow::anyhow!("Could not read /proc/{}/stat: {}", pid, e))
             }
         }
+    }
+
+    // SYSCALL PARSING METHODS - moved from pipeline layer
+
+    /// Parse execve syscall arguments to extract command line
+    /// Format: execve("/bin/ls", ["ls", "-la", "/home"], ["PATH=/usr/bin", ...])
+    fn parse_execve_syscall(&self, args: &[String], _result: Option<&str>) -> Option<Vec<String>> {
+        // The args from SyscallEvent are already split by comma, but for execve we need
+        // to extract the argv array which is the second parameter
+        // For now, we'll do a simple heuristic: look for the second arg that looks like an array
+        
+        if args.len() >= 2 {
+            let argv_str = &args[1];
+            
+            // Look for bracketed content like ["ls", "-la", "/home"]
+            if let (Some(start), Some(end)) = (argv_str.find('['), argv_str.find(']')) {
+                let content = &argv_str[start + 1..end];
+                
+                // Parse quoted arguments
+                let mut command_line = Vec::new();
+                let mut current_arg = String::new();
+                let mut in_quotes = false;
+                let mut escape_next = false;
+                
+                for ch in content.chars() {
+                    if escape_next {
+                        current_arg.push(ch);
+                        escape_next = false;
+                    } else if ch == '\\' {
+                        escape_next = true;
+                    } else if ch == '"' && !escape_next {
+                        in_quotes = !in_quotes;
+                    } else if ch == ',' && !in_quotes {
+                        if !current_arg.trim().is_empty() {
+                            command_line.push(current_arg.trim().to_string());
+                            current_arg.clear();
+                        }
+                    } else if !ch.is_whitespace() || in_quotes {
+                        current_arg.push(ch);
+                    }
+                }
+                
+                // Don't forget the last argument
+                if !current_arg.trim().is_empty() {
+                    command_line.push(current_arg.trim().to_string());
+                }
+                
+                if !command_line.is_empty() {
+                    return Some(command_line);
+                }
+            }
+        }
+        
+        // Fallback: return the first argument as the command
+        if !args.is_empty() {
+            Some(vec![args[0].clone()])
+        } else {
+            None
+        }
+    }
+
+    /// Parse clone syscall result to extract child PID
+    fn parse_clone_result(&self, result: Option<&str>) -> Option<u32> {
+        result?.trim().parse::<u32>().ok()
+    }
+
+    /// Parse fork syscall result to extract child PID
+    fn parse_fork_result(&self, result: Option<&str>) -> Option<u32> {
+        result?.trim().parse::<u32>().ok()
+    }
+
+    /// Parse vfork syscall result to extract child PID
+    fn parse_vfork_result(&self, result: Option<&str>) -> Option<u32> {
+        result?.trim().parse::<u32>().ok()
+    }
+
+    /// Parse wait4 syscall to extract child PID and exit status
+    fn parse_wait4_syscall(&self, args: &[String], result: Option<&str>) -> Option<(u32, Option<i32>)> {
+        // Extract child PID from first argument
+        let child_pid = args.first()?
+            .trim()
+            .parse::<u32>()
+            .ok()?;
+        
+        // Extract exit code from wstatus - look for WEXITSTATUS(s) == N in args
+        let exit_code = if args.len() > 1 {
+            let wstatus_arg = &args[1];
+            if wstatus_arg.contains("WEXITSTATUS") {
+                // Find WEXITSTATUS(s) == N pattern
+                if let Some(start) = wstatus_arg.find("WEXITSTATUS(s) == ") {
+                    let start = start + "WEXITSTATUS(s) == ".len();
+                    if let Some(end) = wstatus_arg[start..].find(['}', ',', ')'].as_ref()) {
+                        wstatus_arg[start..start + end].trim().parse::<i32>().ok()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else if wstatus_arg.contains("WIFSIGNALED") {
+                // Process was terminated by signal - use negative signal number
+                if let Some(start) = wstatus_arg.find("WTERMSIG(s) == ") {
+                    let start = start + "WTERMSIG(s) == ".len();
+                    if let Some(end) = wstatus_arg[start..].find(['}', ',', ')'].as_ref()) {
+                        // Return negative signal number to indicate termination by signal
+                        wstatus_arg[start..start + end].trim().parse::<i32>().map(|sig| -sig).ok()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        
+        // Verify return value matches child PID if available
+        if let Some(returned_pid) = result {
+            if returned_pid.trim().parse::<u32>().ok()? == child_pid {
+                Some((child_pid, exit_code))
+            } else {
+                None
+            }
+        } else {
+            Some((child_pid, exit_code))
+        }
+    }
+
+    /// Parse waitpid syscall to extract child PID and exit status
+    fn parse_waitpid_syscall(&self, args: &[String], result: Option<&str>) -> Option<(u32, Option<i32>)> {
+        // Same parsing logic as wait4, just different syscall name
+        self.parse_wait4_syscall(args, result)
     }
 }

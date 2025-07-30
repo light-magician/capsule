@@ -107,7 +107,7 @@ pub fn create_demo_state() -> Arc<RwLock<AgentState>> {
     let mut state = AgentState::new(Some("claude".to_string()));
 
     // Add some demo processes
-    use core::events::{ProcessEvent, ProcessEventType};
+    use core::{ProcessEvent, ProcessEventType};
     let now = chrono::Utc::now().timestamp_micros() as u64;
 
     // Simulate adding processes

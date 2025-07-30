@@ -1,1 +1,156 @@
+# ───────────────────────────────────────────────────────────────
+# Rust / Cargo
+# ───────────────────────────────────────────────────────────────
+**/debug/
+**/target/
+**/*.rs.bk          # rustfmt backups
+**/*.pdb            # MSVC debug symbols
+**/*.lock
 
+# ───────────────────────────────────────────────────────────────
+# Environment files (any depth)
+# ───────────────────────────────────────────────────────────────
+**/*.env*
+**/.env*
+
+# ───────────────────────────────────────────────────────────────
+# Editors & IDEs
+# ───────────────────────────────────────────────────────────────
+**/.vscode/
+**/.idea/
+**/*.swp
+**/*.swo
+*~
+
+# ───────────────────────────────────────────────────────────────
+# Dependency & build artefacts
+# ───────────────────────────────────────────────────────────────
+**/node_modules/
+**/vendor/
+**/build/
+**/dist/
+**/target/          # (PyBuilder duplicate; harmless)
+
+# Compiled binaries / libraries
+**/*.exe
+**/*.dll
+**/*.app
+**/*.out
+**/*.so
+**/*.dylib
+
+# ───────────────────────────────────────────────────────────────
+# Python
+# ───────────────────────────────────────────────────────────────
+
+## Byte-code & C-extensions
+**/__pycache__/
+**/*.py[cod]
+*$py.class
+**/.Python
+**/*.so
+
+## Virtual-envs / local packages
+**/env/
+**/venv/
+**/.venv/
+**/__pypackages__/
+
+## Packaging
+**/build/
+**/develop-eggs/
+**/dist/
+**/downloads/
+**/sdist/
+**/wheels/
+**/share/python-wheels/
+**/pip-wheel-metadata/
+**/*.egg-info/
+**/.eggs/
+**/eggs/
+**/*.egg
+**/.installed.cfg
+**/MANIFEST
+
+## Installer & lockfiles
+**/pip-log.txt
+**/pip-delete-this-directory.txt
+**/Pipfile.lock
+**/poetry.lock
+
+## PyInstaller
+**/*.manifest
+**/*.spec
+
+## Test / coverage
+**/.tox/
+**/.nox/
+**/.coverage
+**/.coverage.*
+**/htmlcov/
+**/.cache
+**/nosetests.xml
+**/coverage.xml
+**/*.cover
+**/*.py,cover
+**/.pytest_cache/
+**/cover/
+
+## Translations
+**/*.mo
+**/*.pot
+
+## Django / Flask / Scrapy
+**/local_settings.py
+**/db.sqlite3*
+**/instance/
+**/.webassets-cache
+**/.scrapy/
+
+## Docs
+**/docs/_build/
+**/site/
+
+## Notebooks / IPython
+**/.ipynb_checkpoints/
+**/profile_default/
+**/ipython_config.py
+
+## Type-checker caches
+**/.mypy_cache/
+**/.dmypy.json
+**/dmypy.json
+**/.pyre/
+**/.pytype/
+**/cython_debug/
+
+## pyenv
+**/.python-version
+
+# ───────────────────────────────────────────────────────────────
+# Logs
+# ───────────────────────────────────────────────────────────────
+**/*.log
+**/logs/
+
+# ───────────────────────────────────────────────────────────────
+# OS-generated junk
+# ───────────────────────────────────────────────────────────────
+.DS_Store*
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ───────────────────────────────────────────────────────────────
+# Misc project specifics
+# ───────────────────────────────────────────────────────────────
+**/changes.diff     # summary diffs
+**/cmd_traces/      # command‐trace logs
+
+# CLAUDE files 
+**/CLAUDE.md
+**/MVP_ROADMAP.md
+**/CAPSULE_SHIPPING_PLAN.md
+**/CRITICAL_TRACKING_AREAS.md

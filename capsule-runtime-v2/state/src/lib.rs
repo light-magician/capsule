@@ -24,7 +24,7 @@ macro_rules! debug_log {
                 .create(true)
                 .append(true)
                 .open("/tmp/capsule_debug.log") {
-                let _ = writeln!(file, "[{}] {}", 
+                let _ = writeln!(file, "[{}] {}",
                     chrono::Utc::now().format("%H:%M:%S%.3f"),
                     format_args!($($arg)*));
             }
@@ -49,7 +49,11 @@ pub enum ProcessState {
     /// Process created but waiting for execve
     Spawning,
     /// Process actively running with command
-    Active, 
+    Active,
+    /// Process is waiting to execute
+    Waiting,
+    /// Process has triggered exit but is not yet executed
+    Exiting,
     /// Process has exited
     Exited,
 }
@@ -163,73 +167,98 @@ impl AgentState {
 
     /// Get all currently live processes (for TUI) sorted by PID ascending
     pub fn live_processes(&self) -> Vec<&LiveProcess> {
-        let mut processes: Vec<&LiveProcess> = self.active_pids
+        let mut processes: Vec<&LiveProcess> = self
+            .active_pids
             .iter()
             .filter_map(|pid| self.processes.get(pid))
             .collect();
-        
+
         // Sort by PID ascending for consistent display order
         processes.sort_by_key(|process| process.pid);
         processes
     }
-    
+
     /// Get all processes sorted by state (Active first), then PID
     /// Shows ALL processes including exited ones for debugging
     pub fn processes_by_state(&self) -> Vec<&LiveProcess> {
         // Get ALL processes, not just active ones
         let mut processes: Vec<&LiveProcess> = self.processes.values().collect();
-        
+
         // CONSISTENCY CHECK: Fix any processes where active_pids and ProcessState are inconsistent
         let mut active_count = 0;
-        let mut spawning_count = 0; 
+        let mut spawning_count = 0;
         let mut exited_count = 0;
-        
+
         for process in &processes {
             let is_in_active_pids = self.active_pids.contains(&process.pid);
             match process.state {
                 ProcessState::Active => {
                     active_count += 1;
                     if !is_in_active_pids {
-                        debug_log!("DEBUG: INCONSISTENCY - Process {} is Active but NOT in active_pids", process.pid);
+                        debug_log!(
+                            "DEBUG: INCONSISTENCY - Process {} is Active but NOT in active_pids",
+                            process.pid
+                        );
                     }
-                },
+                }
+                ProcessState::Waiting => {
+                    todo!("implement tracking for waiting")
+                }
                 ProcessState::Spawning => {
                     spawning_count += 1;
                     if !is_in_active_pids {
-                        debug_log!("DEBUG: INCONSISTENCY - Process {} is Spawning but NOT in active_pids", process.pid);
+                        debug_log!(
+                            "DEBUG: INCONSISTENCY - Process {} is Spawning but NOT in active_pids",
+                            process.pid
+                        );
                     }
-                },
+                }
+                ProcessState::Exiting => {
+                    todo!("implement tracking for exeted");
+                }
                 ProcessState::Exited => {
                     exited_count += 1;
                     if is_in_active_pids {
-                        debug_log!("DEBUG: INCONSISTENCY - Process {} is Exited but STILL in active_pids", process.pid);
+                        debug_log!(
+                            "DEBUG: INCONSISTENCY - Process {} is Exited but STILL in active_pids",
+                            process.pid
+                        );
                     }
-                },
+                }
             }
         }
-        
+
         // Only log state summary if there are inconsistencies or every 10th call
         if active_count + spawning_count != self.active_pids.len() || processes.len() % 10 == 0 {
-            debug_log!("DEBUG: State summary - Active: {}, Spawning: {}, Exited: {}, active_pids size: {}", 
-                      active_count, spawning_count, exited_count, self.active_pids.len());
+            debug_log!(
+                "DEBUG: State summary - Active: {}, Spawning: {}, Exited: {}, active_pids size: {}",
+                active_count,
+                spawning_count,
+                exited_count,
+                self.active_pids.len()
+            );
         }
-        
+
         // Sort by state priority (Active > Spawning > Exited), then by PID
         processes.sort_by(|a, b| {
             let state_order_a = match a.state {
-                ProcessState::Active => 0,
-                ProcessState::Spawning => 1, 
-                ProcessState::Exited => 2,
+                ProcessState::Spawning => 0,
+                ProcessState::Active => 1,
+                ProcessState::Waiting => 2,
+                ProcessState::Exiting => 3,
+                ProcessState::Exited => 4,
             };
             let state_order_b = match b.state {
-                ProcessState::Active => 0,
-                ProcessState::Spawning => 1,
-                ProcessState::Exited => 2,  
+                ProcessState::Spawning => 0,
+                ProcessState::Active => 1,
+                ProcessState::Waiting => 2,
+                ProcessState::Exiting => 3,
+                ProcessState::Exited => 4,
             };
-            
+
             state_order_a.cmp(&state_order_b).then(a.pid.cmp(&b.pid))
         });
-        
+
         processes
     }
 
@@ -247,26 +276,28 @@ impl AgentState {
     pub fn active_count(&self) -> usize {
         self.active_pids.len()
     }
-    
+
     /// Get processes in tree order with indentation for TUI display
     pub fn tree_processes(&self) -> Vec<(u32, String, &LiveProcess)> {
         let mut tree_items = Vec::new();
         let mut visited = std::collections::HashSet::new();
-        
+
         // First, find root processes (PPID = 0 or parent not in our process list)
-        let mut roots: Vec<&LiveProcess> = self.processes.values()
+        let mut roots: Vec<&LiveProcess> = self
+            .processes
+            .values()
             .filter(|p| p.ppid == 0 || !self.processes.contains_key(&p.ppid))
             .collect();
         roots.sort_by_key(|p| p.pid);
-        
+
         // Build tree recursively for each root
         for root in roots {
             self.build_tree_recursive(root, 0, &mut tree_items, &mut visited);
         }
-        
+
         tree_items
     }
-    
+
     fn build_tree_recursive<'a>(
         &'a self,
         process: &'a LiveProcess,
@@ -278,7 +309,7 @@ impl AgentState {
             return; // Avoid cycles
         }
         visited.insert(process.pid);
-        
+
         // Generate indent string
         let indent = if depth == 0 {
             String::new()
@@ -293,15 +324,17 @@ impl AgentState {
             }
             indent
         };
-        
+
         tree_items.push((depth, indent, process));
-        
+
         // Find and add children
-        let mut children: Vec<&LiveProcess> = self.processes.values()
+        let mut children: Vec<&LiveProcess> = self
+            .processes
+            .values()
             .filter(|p| p.ppid == process.pid && p.pid != process.pid) // Avoid self-reference
             .collect();
         children.sort_by_key(|p| p.pid);
-        
+
         for child in children.iter() {
             self.build_tree_recursive(child, depth + 1, tree_items, visited);
         }
@@ -376,49 +409,86 @@ impl ProcessTracker {
         // Debug: Track all events we're processing (to stderr to avoid TUI interference)
         match event.event_type {
             ProcessEventType::Clone { child_pid } => {
-                debug_log!("DEBUG: EVENT - Clone: parent {} created child {}", event.pid, child_pid);
-                self.handle_process_creation(&mut state, event.pid, child_pid, &event, "clone").await?;
+                debug_log!(
+                    "DEBUG: EVENT - Clone: parent {} created child {}",
+                    event.pid,
+                    child_pid
+                );
+                self.handle_process_creation(&mut state, event.pid, child_pid, &event, "clone")
+                    .await?;
             }
             ProcessEventType::Fork { child_pid } => {
-                debug_log!("DEBUG: EVENT - Fork: parent {} created child {}", event.pid, child_pid);
-                self.handle_process_creation(&mut state, event.pid, child_pid, &event, "fork").await?;
+                debug_log!(
+                    "DEBUG: EVENT - Fork: parent {} created child {}",
+                    event.pid,
+                    child_pid
+                );
+                self.handle_process_creation(&mut state, event.pid, child_pid, &event, "fork")
+                    .await?;
             }
             ProcessEventType::VFork { child_pid } => {
-                debug_log!("DEBUG: EVENT - VFork: parent {} created child {}", event.pid, child_pid);
-                self.handle_process_creation(&mut state, event.pid, child_pid, &event, "vfork").await?;
+                debug_log!(
+                    "DEBUG: EVENT - VFork: parent {} created child {}",
+                    event.pid,
+                    child_pid
+                );
+                self.handle_process_creation(&mut state, event.pid, child_pid, &event, "vfork")
+                    .await?;
             }
             ProcessEventType::Exec => {
-                debug_log!("DEBUG: EVENT - Exec: PID {} -> {:?}", event.pid, event.command_line.get(0).unwrap_or(&"<no command>".to_string()));
+                debug_log!(
+                    "DEBUG: EVENT - Exec: PID {} -> {:?}",
+                    event.pid,
+                    event
+                        .command_line
+                        .get(0)
+                        .unwrap_or(&"<no command>".to_string())
+                );
                 self.handle_exec(&mut state, &event).await?;
             }
             ProcessEventType::Exit => {
-                debug_log!("DEBUG: EVENT - Exit: PID {} (exit code: {:?})", event.pid, event.exit_code);
+                debug_log!(
+                    "DEBUG: EVENT - Exit: PID {} (exit code: {:?})",
+                    event.pid,
+                    event.exit_code
+                );
                 self.handle_exit(&mut state, &event).await?;
             }
-            ProcessEventType::Wait { child_pid, child_exit_code } => {
-                debug_log!("DEBUG: EVENT - Wait: parent {} waited for child {} (exit code: {:?})", event.pid, child_pid, child_exit_code);
-                self.handle_wait(&mut state, event.pid, child_pid, child_exit_code, &event).await?;
+            ProcessEventType::Wait {
+                child_pid,
+                child_exit_code,
+            } => {
+                debug_log!(
+                    "DEBUG: EVENT - Wait: parent {} waited for child {} (exit code: {:?})",
+                    event.pid,
+                    child_pid,
+                    child_exit_code
+                );
+                self.handle_wait(&mut state, event.pid, child_pid, child_exit_code, &event)
+                    .await?;
             }
         }
 
         state.last_updated = event.timestamp;
         Ok(())
     }
-    
+
     /// Handle process creation (clone/fork/vfork)
     async fn handle_process_creation(
-        &self, 
-        state: &mut AgentState, 
-        parent_pid: u32, 
+        &self,
+        state: &mut AgentState,
+        parent_pid: u32,
         child_pid: u32,
         event: &ProcessEvent,
-        creation_type: &str
+        creation_type: &str,
     ) -> Result<()> {
         // Get parent name for better child naming
-        let parent_name = state.processes.get(&parent_pid)
+        let parent_name = state
+            .processes
+            .get(&parent_pid)
             .map(|p| p.name.as_str())
             .unwrap_or("unknown");
-            
+
         // Create a placeholder process for the child with parent context
         let child_name = format!("{}:{}", creation_type, parent_name);
         let child_process = LiveProcess {
@@ -434,7 +504,7 @@ impl ProcessTracker {
         // Add child to processes and active PIDs
         state.processes.insert(child_pid, child_process);
         state.active_pids.insert(child_pid);
-        
+
         // Update parent's PPID if we know it now
         if let Some(_parent_process) = state.processes.get_mut(&parent_pid) {
             // Parent might have had PPID=0, but now we can establish the relationship
@@ -446,21 +516,31 @@ impl ProcessTracker {
     /// Handle exec - process executed new program
     async fn handle_exec(&self, state: &mut AgentState, event: &ProcessEvent) -> Result<()> {
         let name = LiveProcess::generate_name(&event.command_line, state.capsule_target.as_deref());
-        
+
         if let Some(existing_process) = state.processes.get_mut(&event.pid) {
             // Update existing process (from clone/fork) with real command line
             // Keep the existing PPID from clone/fork event
             existing_process.name = name;
             existing_process.command_line = event.command_line.clone();
             existing_process.state = ProcessState::Active; // Now actively running
-            
-            debug_log!("DEBUG: Exec updated existing process {} with PPID {} -> {:?}", 
-                      event.pid, existing_process.ppid, event.command_line.get(0).unwrap_or(&"<no command>".to_string()));
+
+            debug_log!(
+                "DEBUG: Exec updated existing process {} with PPID {} -> {:?}",
+                event.pid,
+                existing_process.ppid,
+                event
+                    .command_line
+                    .get(0)
+                    .unwrap_or(&"<no command>".to_string())
+            );
         } else {
             // New process we haven't seen before (direct execve)
             // Try to resolve PPID from /proc filesystem if available
-            let resolved_ppid = self.resolve_ppid_from_proc(event.pid).await.unwrap_or(event.ppid);
-            
+            let resolved_ppid = self
+                .resolve_ppid_from_proc(event.pid)
+                .await
+                .unwrap_or(event.ppid);
+
             let process = LiveProcess {
                 pid: event.pid,
                 ppid: resolved_ppid,
@@ -471,8 +551,15 @@ impl ProcessTracker {
                 state: ProcessState::Active, // Directly active
             };
 
-            debug_log!("DEBUG: Exec created new process {} with resolved PPID {} -> {:?}", 
-                      event.pid, resolved_ppid, event.command_line.get(0).unwrap_or(&"<no command>".to_string()));
+            debug_log!(
+                "DEBUG: Exec created new process {} with resolved PPID {} -> {:?}",
+                event.pid,
+                resolved_ppid,
+                event
+                    .command_line
+                    .get(0)
+                    .unwrap_or(&"<no command>".to_string())
+            );
 
             state.processes.insert(event.pid, process);
             state.active_pids.insert(event.pid);
@@ -487,7 +574,11 @@ impl ProcessTracker {
         if let Some(last_exit) = state.recent_exits.get(&event.pid) {
             let time_diff = event.timestamp.saturating_sub(*last_exit);
             if time_diff < self.exit_window.as_micros() as u64 {
-                debug_log!("DEBUG: Ignoring duplicate exit for PID {} (within {}μs window)", event.pid, self.exit_window.as_micros());
+                debug_log!(
+                    "DEBUG: Ignoring duplicate exit for PID {} (within {}μs window)",
+                    event.pid,
+                    self.exit_window.as_micros()
+                );
                 return Ok(()); // Duplicate exit, ignore
             }
         }
@@ -511,7 +602,11 @@ impl ProcessTracker {
         if let Some(process) = state.processes.get_mut(&event.pid) {
             process.end_time = Some(event.timestamp);
             process.state = ProcessState::Exited;
-            debug_log!("DEBUG: Process {} ({}) marked as exited", event.pid, process.name);
+            debug_log!(
+                "DEBUG: Process {} ({}) marked as exited",
+                event.pid,
+                process.name
+            );
         } else {
             debug_log!("DEBUG: Exit event for unknown process {}", event.pid);
         }
@@ -521,12 +616,12 @@ impl ProcessTracker {
 
     /// Handle wait - parent waited for child
     async fn handle_wait(
-        &self, 
-        _state: &mut AgentState, 
-        parent_pid: u32, 
-        child_pid: u32, 
+        &self,
+        _state: &mut AgentState,
+        parent_pid: u32,
+        child_pid: u32,
         child_exit_code: Option<i32>,
-        _event: &ProcessEvent
+        _event: &ProcessEvent,
     ) -> Result<()> {
         // For now, just track the wait event
         // In the future, this could be used for more sophisticated parent-child relationship tracking
@@ -548,17 +643,17 @@ impl ProcessTracker {
     /// Resolve PPID from /proc filesystem
     async fn resolve_ppid_from_proc(&self, pid: u32) -> Result<u32> {
         let proc_stat_path = format!("/proc/{}/stat", pid);
-        
+
         match tokio::fs::read_to_string(&proc_stat_path).await {
             Ok(stat_content) => {
                 // /proc/pid/stat format: pid (comm) state ppid ...
                 // We need to parse carefully because comm can contain spaces and parentheses
-                
+
                 // Find the last ')' which ends the comm field
                 if let Some(comm_end) = stat_content.rfind(')') {
                     let after_comm = &stat_content[comm_end + 1..];
                     let fields: Vec<&str> = after_comm.trim().split_whitespace().collect();
-                    
+
                     // After comm, we have: state ppid ...
                     if fields.len() >= 2 {
                         if let Ok(ppid) = fields[1].parse::<u32>() {
@@ -567,8 +662,12 @@ impl ProcessTracker {
                         }
                     }
                 }
-                
-                debug_log!("DEBUG: Failed to parse PPID from /proc/{}/stat: {}", pid, stat_content);
+
+                debug_log!(
+                    "DEBUG: Failed to parse PPID from /proc/{}/stat: {}",
+                    pid,
+                    stat_content
+                );
                 Err(anyhow::anyhow!("Failed to parse /proc/{}/stat", pid))
             }
             Err(e) => {

@@ -1,9 +1,12 @@
-//! Core process event types for cross-platform process tracking
+//! Process lifecycle events
 //!
-//! These types represent Processes in the UNIX environment.
-//! Platform specific parsers (eBPF, strace, dtrace) should convert
-//! their raw output into ProcessEvent structs, allowing downstream
-//! components to work regardless of platform.
+//! Domain-specific events for process creation, execution, and termination.
+//! These are converted from SyscallEvents when we detect process-related syscalls
+//! like clone, fork, execve, exit_group, etc.
+//!
+//! ProcessEvent represents the semantic meaning of process syscalls,
+//! while SyscallEvent represents the raw syscall data.
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

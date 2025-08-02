@@ -6,12 +6,13 @@ FROM rust:1.80-slim-bullseye
 #           lsof
 #           libseccomp-dev
 #           strace
+#           procps (ps)
 #           curl (for Node.js install)
 #           ca-certificates (for HTTPS)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         python3 python3-venv python3-pip libseccomp-dev lsof strace \
-        curl ca-certificates && \
+        curl ca-certificates procps && \
     rm -rf /var/lib/apt/lists/*
 
 # ----------- INSTALL NODE.JS 20.x LTS ---------------------

@@ -9,6 +9,15 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
+// STRACE-SPECIFIC PATTERNS
+// TODO: These patterns are specific to strace output format and will need adaptation
+// for other tracers (eBPF, dtrace, perf). For universal process exit detection:
+// - strace: Uses exit() syscall + "+++ exited with N +++" annotation
+// - eBPF: Uses sched_process_exit tracepoint (fired during kernel cleanup)
+// - eBPF (complete): Uses sched_process_free tracepoint (fully terminated)
+static STRACE_EXIT_STATUS_PATTERN: &str = r"^\[pid\s+(?P<pid>\d+)\]\s+(?P<timestamp>\d+:\d+:\d+\.\d+)\s+\+\+\+\s+exited\s+with\s+(?P<exit_code>\d+)\s+\+\+\+";
+static STRACE_SYSCALL_PATTERN: &str = r"^\[pid\s+(?P<pid>\d+)\]\s+(?P<timestamp>\d+:\d+:\d+\.\d+)\s+(?P<syscall>\w+)\((?P<args>.*?)(?:\)|<unfinished)(?:\s*=\s*(?P<result>[^<\n]+))?.*";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StraceParseResult {
     Event(SyscallEvent),
@@ -31,11 +40,43 @@ impl StraceParser {
             return StraceParseResult::Attachment(clean_line.to_string());
         }
 
+        // Handle strace exit status annotations: "[pid  2008] 13:13:48.055387 +++ exited with 0 +++"
+        // NOTE: This is strace-specific editorial content, not a raw syscall
+        static EXIT_STATUS_REGEX: OnceLock<Regex> = OnceLock::new();
+        let exit_regex = EXIT_STATUS_REGEX.get_or_init(|| {
+            Regex::new(STRACE_EXIT_STATUS_PATTERN).unwrap()
+        });
+
+        if let Some(captures) = exit_regex.captures(clean_line) {
+            let pid = captures
+                .name("pid")
+                .and_then(|m| m.as_str().parse::<u32>().ok())
+                .unwrap_or(0);
+
+            let timestamp = chrono::Utc::now().timestamp_micros() as u64;
+
+            let exit_code = captures
+                .name("exit_code")
+                .and_then(|m| m.as_str().parse::<i32>().ok());
+
+            // Create a synthetic "process_exited" event for the "+++ exited +++" pattern
+            // This allows us to distinguish between exit() syscall (Exiting) and full termination (Exited)
+            let syscall_event = SyscallEvent::new(
+                pid,
+                timestamp,
+                "process_exited".to_string(), // Synthetic event name
+                vec![exit_code.map(|c| c.to_string()).unwrap_or_else(|| "0".to_string())],
+                exit_code.map(|c| c.to_string()),
+                line.to_string(),
+            );
+
+            return StraceParseResult::Event(syscall_event);
+        }
+
         // Comprehensive regex for any syscall
         static STRACE_REGEX: OnceLock<Regex> = OnceLock::new();
         let regex = STRACE_REGEX.get_or_init(|| {
-            Regex::new(r"^\[pid\s+(?P<pid>\d+)\]\s+(?P<timestamp>\d+:\d+:\d+\.\d+)\s+(?P<syscall>\w+)\((?P<args>.*?)(?:\)|<unfinished)(?:\s*=\s*(?P<result>[^<\n]+))?.*")
-                .unwrap()
+            Regex::new(STRACE_SYSCALL_PATTERN).unwrap()
         });
 
         if let Some(captures) = regex.captures(clean_line) {

@@ -52,7 +52,9 @@ pub enum ProcessSyscall {
     Clone,
     Fork,
     VFork,
+    Exit,         // Added for handling exit() syscall
     ExitGroup,
+    ProcessExited, // Synthetic event for strace "+++ exited +++" annotations
     Wait4,
     WaitPid,
 }
@@ -179,7 +181,9 @@ pub fn categorize_syscall(syscall_name: &str) -> SyscallCategory {
         "clone" => SyscallCategory::Process(ProcessSyscall::Clone),
         "fork" => SyscallCategory::Process(ProcessSyscall::Fork),
         "vfork" => SyscallCategory::Process(ProcessSyscall::VFork),
+        "exit" => SyscallCategory::Process(ProcessSyscall::Exit),
         "exit_group" => SyscallCategory::Process(ProcessSyscall::ExitGroup),
+        "process_exited" => SyscallCategory::Process(ProcessSyscall::ProcessExited), // Synthetic strace event
         "wait4" => SyscallCategory::Process(ProcessSyscall::Wait4),
         "waitpid" => SyscallCategory::Process(ProcessSyscall::WaitPid),
 

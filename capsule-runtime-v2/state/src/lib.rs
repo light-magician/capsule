@@ -202,7 +202,13 @@ impl AgentState {
                     }
                 }
                 ProcessState::Waiting => {
-                    todo!("implement tracking for waiting")
+                    // Waiting processes are considered active (they're just waiting for something)
+                    if !is_in_active_pids {
+                        debug_log!(
+                            "DEBUG: INCONSISTENCY - Process {} is Waiting but NOT in active_pids",
+                            process.pid
+                        );
+                    }
                 }
                 ProcessState::Spawning => {
                     spawning_count += 1;
@@ -214,7 +220,13 @@ impl AgentState {
                     }
                 }
                 ProcessState::Exiting => {
-                    todo!("implement tracking for exeted");
+                    // Exiting processes are still technically active until fully exited
+                    if !is_in_active_pids {
+                        debug_log!(
+                            "DEBUG: INCONSISTENCY - Process {} is Exiting but NOT in active_pids",
+                            process.pid
+                        );
+                    }
                 }
                 ProcessState::Exited => {
                     exited_count += 1;
@@ -500,6 +512,14 @@ impl ProcessTracker {
                     None // Invalid vfork - no child PID
                 }
             },
+            ProcessSyscall::Exit => {
+                // Parse exit code from first argument (exit(0))
+                let exit_code = syscall_event.args
+                    .first()
+                    .and_then(|arg| arg.parse::<i32>().ok());
+
+                Some(ProcessEvent::exit(syscall_event.timestamp, syscall_event.pid, exit_code))
+            },
             ProcessSyscall::ExitGroup => {
                 // Parse exit code from result
                 let exit_code = syscall_event.result
@@ -507,6 +527,15 @@ impl ProcessTracker {
                     .and_then(|r| r.parse::<i32>().ok());
 
                 Some(ProcessEvent::exit(syscall_event.timestamp, syscall_event.pid, exit_code))
+            },
+            ProcessSyscall::ProcessExited => {
+                // Synthetic event from strace "+++ exited +++" - process fully terminated
+                let exit_code = syscall_event.args
+                    .first()
+                    .and_then(|arg| arg.parse::<i32>().ok());
+
+                // Create a special "fully exited" ProcessEvent
+                Some(ProcessEvent::fully_exited(syscall_event.timestamp, syscall_event.pid, exit_code))
             },
             ProcessSyscall::Wait4 => {
                 // Parse child PID and exit code from arguments and result
@@ -573,11 +602,19 @@ impl ProcessTracker {
             }
             ProcessEventType::Exit => {
                 debug_log!(
-                    "DEBUG: EVENT - Exit: PID {} (exit code: {:?})",
+                    "DEBUG: EVENT - Exit: PID {} (exit code: {:?}) - entering exit sequence",
                     event.pid,
                     event.exit_code
                 );
-                self.handle_exit(&mut state, &event).await?;
+                self.handle_exit_start(&mut state, &event).await?;
+            }
+            ProcessEventType::FullyExited => {
+                debug_log!(
+                    "DEBUG: EVENT - FullyExited: PID {} (exit code: {:?}) - process completely terminated",
+                    event.pid,
+                    event.exit_code
+                );
+                self.handle_fully_exited(&mut state, &event).await?;
             }
             ProcessEventType::Wait {
                 child_pid,
@@ -693,14 +730,14 @@ impl ProcessTracker {
         Ok(())
     }
 
-    /// Handle exit - process terminated  
-    async fn handle_exit(&self, state: &mut AgentState, event: &ProcessEvent) -> Result<()> {
+    /// Handle exit start - process called exit() syscall and is entering exit sequence
+    async fn handle_exit_start(&self, state: &mut AgentState, event: &ProcessEvent) -> Result<()> {
         // Check for duplicate exit within window
         if let Some(last_exit) = state.recent_exits.get(&event.pid) {
             let time_diff = event.timestamp.saturating_sub(*last_exit);
             if time_diff < self.exit_window.as_micros() as u64 {
                 debug_log!(
-                    "DEBUG: Ignoring duplicate exit for PID {} (within {}μs window)",
+                    "DEBUG: Ignoring duplicate exit start for PID {} (within {}μs window)",
                     event.pid,
                     self.exit_window.as_micros()
                 );
@@ -716,9 +753,26 @@ impl ProcessTracker {
         };
 
         if is_root_process {
-            debug_log!("DEBUG: WARNING - Root/main process {} is exiting! This might indicate session end.", event.pid);
+            debug_log!("DEBUG: WARNING - Root/main process {} is starting exit sequence! This might indicate session end.", event.pid);
         }
 
+        // Update process state to Exiting (not yet fully terminated)
+        if let Some(process) = state.processes.get_mut(&event.pid) {
+            process.state = ProcessState::Exiting;
+            debug_log!(
+                "DEBUG: Process {} ({}) marked as exiting",
+                event.pid,
+                process.name
+            );
+        } else {
+            debug_log!("DEBUG: Exit start event for unknown process {}", event.pid);
+        }
+
+        Ok(())
+    }
+
+    /// Handle fully exited - process has been completely terminated (strace "+++ exited +++" or equivalent)
+    async fn handle_fully_exited(&self, state: &mut AgentState, event: &ProcessEvent) -> Result<()> {
         // Record exit
         state.recent_exits.insert(event.pid, event.timestamp);
         state.active_pids.remove(&event.pid);
@@ -728,12 +782,12 @@ impl ProcessTracker {
             process.end_time = Some(event.timestamp);
             process.state = ProcessState::Exited;
             debug_log!(
-                "DEBUG: Process {} ({}) marked as exited",
+                "DEBUG: Process {} ({}) marked as fully exited",
                 event.pid,
                 process.name
             );
         } else {
-            debug_log!("DEBUG: Exit event for unknown process {}", event.pid);
+            debug_log!("DEBUG: Fully exited event for unknown process {}", event.pid);
         }
 
         Ok(())

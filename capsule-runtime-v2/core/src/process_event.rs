@@ -41,8 +41,10 @@ pub enum ProcessEventType {
     VFork { child_pid: u32 },
     /// Process executed new program (execve)
     Exec,
-    /// Process exited (exit_group, termination)
+    /// Process started exit sequence (exit/exit_group syscall called)
     Exit,
+    /// Process fully terminated (strace "+++ exited +++" or equivalent)
+    FullyExited,
     /// Parent waited for child process (wait4, waitpid)
     Wait { child_pid: u32, child_exit_code: Option<i32> },
 }
@@ -106,13 +108,26 @@ impl ProcessEvent {
         }
     }
 
-    /// Create a new exit event
+    /// Create a new exit event (exit syscall called - process entering exit sequence)
     pub fn exit(timestamp: u64, pid: u32, exit_code: Option<i32>) -> Self {
         Self {
             timestamp,
             pid,
             ppid: 0, // not relevant for exit events
             event_type: ProcessEventType::Exit,
+            command_line: Vec::new(), // not relevant for exit events
+            working_dir: None,
+            exit_code,
+        }
+    }
+
+    /// Create a new fully exited event (process completely terminated)
+    pub fn fully_exited(timestamp: u64, pid: u32, exit_code: Option<i32>) -> Self {
+        Self {
+            timestamp,
+            pid,
+            ppid: 0, // not relevant for exit events
+            event_type: ProcessEventType::FullyExited,
             command_line: Vec::new(), // not relevant for exit events
             working_dir: None,
             exit_code,

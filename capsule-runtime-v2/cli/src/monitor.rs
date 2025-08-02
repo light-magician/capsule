@@ -11,6 +11,7 @@ use crossterm::{
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    style::{Color, Modifier, Style},
 };
 use state::{AgentState, LiveProcess};
 use std::io;
@@ -261,25 +262,25 @@ fn create_process_list_items(processes: &[&LiveProcess]) -> Vec<ListItem<'static
 fn create_process_state_items(processes: &[&state::LiveProcess]) -> Vec<ListItem<'static>> {
     if processes.is_empty() {
         return vec![
-            ListItem::new("  PID   PPID  STATE  NAME"),
-            ListItem::new("  ---   ----  -----  ----"),
+            ListItem::new("  PID   PPID  STATE     NAME"),
+            ListItem::new("  ---   ----  --------  ----"),
             ListItem::new("  No processes")
         ];
     }
 
     let mut items = vec![
-        ListItem::new("  PID   PPID  STATE  NAME"),
-        ListItem::new("  ---   ----  -----  ----"),
+        ListItem::new("  PID   PPID  STATE     NAME"),
+        ListItem::new("  ---   ----  --------  ----"),
     ];
 
     for process in processes {
-        // Format state as short tag
-        let state_str = match process.state {
-            state::ProcessState::Spawning => "spawn",
-            state::ProcessState::Active => "run  ",
-            state::ProcessState::Waiting => "wait ",
-            state::ProcessState::Exiting => "exit>",
-            state::ProcessState::Exited => "exit ",
+        // Format state to match ProcessState enum exactly with requested colors
+        let (state_str, state_color) = match process.state {
+            state::ProcessState::Spawning => ("Spawning", Color::Yellow),     // Spawning (yellow)
+            state::ProcessState::Active => ("Active  ", Color::Green),        // Active (green) 
+            state::ProcessState::Waiting => ("Waiting ", Color::Rgb(255, 165, 0)), // Waiting (orange)
+            state::ProcessState::Exiting => ("Exiting ", Color::Red),         // Exiting (red)
+            state::ProcessState::Exited => ("Exited  ", Color::Rgb(128, 128, 128)), // Exited (lower contrast grey)
         };
 
         // Use process name, truncate if needed
@@ -289,15 +290,17 @@ fn create_process_state_items(processes: &[&state::LiveProcess]) -> Vec<ListItem
             process.name.clone()
         };
 
-        let line = format!(
-            "{:>5} {:>5}   {}  {}",
+        let line_text = format!(
+            "{:>5} {:>5}  {:8}  {}",
             process.pid,
             process.ppid,
             state_str,
             name
         );
 
-        items.push(ListItem::new(line));
+        // Create ListItem with colored state
+        let line_item = ListItem::new(Span::styled(line_text, Style::default().fg(state_color)));
+        items.push(line_item);
     }
 
     items

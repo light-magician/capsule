@@ -1,0 +1,12 @@
+[package]
+name = "state"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+core = { path = "../core" }
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true

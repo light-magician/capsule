@@ -1,0 +1,30 @@
+[package]
+name = "cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "capsule"
+path = "src/main.rs"
+
+[dependencies]
+tokio.workspace = true
+tokio-util.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+dirs.workspace = true
+libc.workspace = true
+
+# Local crates
+core = { path = "../core" }
+trace = { path = "../trace" }
+parse = { path = "../parse" }
+state = { path = "../state" }
+io = { path = "../io" }

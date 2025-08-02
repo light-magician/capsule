@@ -150,7 +150,20 @@ Thumbs.db
 **/cmd_traces/      # command‐trace logs
 
 # CLAUDE files 
+claude/
 **/CLAUDE.md
 **/MVP_ROADMAP.md
 **/CAPSULE_SHIPPING_PLAN.md
 **/CRITICAL_TRACKING_AREAS.md
+
+
+# Added by cargo
+
+/target
+
+
+# Added by cargo
+#
+# already existing elements were commented out
+
+#/target

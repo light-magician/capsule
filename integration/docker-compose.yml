@@ -8,6 +8,7 @@ services:
     volumes:
       - ../capsule-runtime:/capsule/capsule-runtime
       - ../capsule-agents:/capsule/capsule-agents
+      - ../capsule-runtime-v2:/capsule/capsule-runtime-v2
     depends_on:
       supabase-db:
         condition: service_healthy
@@ -25,7 +26,7 @@ services:
       retries: 10
     restart: unless-stopped
     ports:
-      - "54322:5432"
+      - '54322:5432'
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
@@ -40,10 +41,10 @@ services:
     image: kong:2.8.1
     restart: unless-stopped
     ports:
-      - "8000:8000/tcp"
-      - "8443:8443/tcp"
+      - '8000:8000/tcp'
+      - '8443:8443/tcp'
     environment:
-      KONG_DATABASE: "off"
+      KONG_DATABASE: 'off'
       KONG_DECLARATIVE_CONFIG: /var/lib/kong/kong.yml
       KONG_DNS_ORDER: LAST,A,CNAME
       KONG_PLUGINS: request-transformer,cors,key-auth,acl,basic-auth
@@ -60,7 +61,15 @@ services:
       supabase-db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
+      test:
+        [
+          'CMD',
+          'wget',
+          '--no-verbose',
+          '--tries=1',
+          '--spider',
+          'http://localhost:9999/health',
+        ]
       timeout: 5s
       interval: 5s
       retries: 3
@@ -72,8 +81,8 @@ services:
       GOTRUE_DB_DRIVER: postgres
       GOTRUE_DB_DATABASE_URL: postgresql://supabase_auth_admin:postgres@supabase-db:5432/postgres
       GOTRUE_SITE_URL: http://localhost:3000
-      GOTRUE_URI_ALLOW_LIST: ""
-      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_URI_ALLOW_LIST: ''
+      GOTRUE_DISABLE_SIGNUP: 'false'
       GOTRUE_JWT_ADMIN_ROLES: service_role
       GOTRUE_JWT_AUD: authenticated
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
@@ -93,7 +102,7 @@ services:
       PGRST_DB_SCHEMAS: public
       PGRST_DB_ANON_ROLE: anon
       PGRST_JWT_SECRET: super-secret-jwt-token-with-at-least-32-characters-long
-      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_DB_USE_LEGACY_GUCS: 'false'
       PGRST_APP_SETTINGS_JWT_SECRET: super-secret-jwt-token-with-at-least-32-characters-long
       PGRST_APP_SETTINGS_JWT_EXP: 3600
 
@@ -103,7 +112,13 @@ services:
     image: supabase/studio:20240326-5e5586d
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/profile', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"]
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://localhost:3000/api/profile', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})",
+        ]
       timeout: 5s
       interval: 5s
       retries: 3

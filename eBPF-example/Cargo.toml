@@ -1,6 +1,6 @@
 
 [workspace]
-members = ["hello-ebpf", "hello-ebpf-kern"]
+members = ["src/hello-ebpf-userspace", "src/hello-ebpf-kernelspace"]
 resolver = "2"
 
 [workspace.dependencies]

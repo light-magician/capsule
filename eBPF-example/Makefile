@@ -13,9 +13,9 @@ help:
 build:
 	@echo "Building eBPF Hello World Project..."
 	@echo "1. Building eBPF kernel program..."
-	@cd hello-ebpf-kern && cargo +nightly build --target bpfel-unknown-none -Z build-std=core
+	@cd src/hello-ebpf-kernelspace && cargo +nightly build --target bpfel-unknown-none -Z build-std=core
 	@echo "2. Building userspace loader..."
-	@cd hello-ebpf && cargo build
+	@cd src/hello-ebpf-userspace && cargo build
 	@echo "✅ Build complete!"
 	@echo ""
 	@echo "To run: ./target/debug/hello-eBPF"
@@ -31,6 +31,6 @@ stop:
 
 clean: stop
 	@echo "Cleaning build artifacts..."
-	@cd hello-ebpf-kern && cargo clean
-	@cd hello-ebpf && cargo clean
+	@cd src/hello-ebpf-kernelspace && cargo clean
+	@cd src/hello-ebpf-userspace && cargo clean
 	@echo "✅ Clean complete!"

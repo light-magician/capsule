@@ -3,73 +3,160 @@
 #![no_std]
 #![no_main]
 
+/// eBPF constraints:
+/// - only 512 bytes of stack (or 256 if utilizing tail calls)
+/// - no access to heap space and data must be written to maps
+/// - cannot use the std lib in C or Rust
+/// - core::fmt (formatting) may not be used and neither can traits that rely on it
+///   Ex: Display or Debug
+/// - as there is no heap, there is also no alloc or collections
+/// - cannot panic as the eBPF VM does not support stack unwinding, or abort instruction
+/// - no main function, already provided for above
 use aya_ebpf::{
+    helpers::{
+        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_ns,
+    },
     macros::{map, tracepoint},
     maps::{HashMap, RingBuf},
     programs::TracePointContext,
 };
 
 /// HashMap to track process ID's 1000 should be enough for now
-#[map]
-static PID_TRACKER: HashMap<u32, u8> = HashMap::with_max_entries(1000, 0);
+#[map(name = "PID_TRACKER")]
+static mut PID_TRACKER: HashMap<u32, u8> = HashMap::with_max_entries(1000, 0);
 
-// Test RingBuf for event streaming
-#[map]
-static EVENT_RING: RingBuf = RingBuf::with_byte_size(1024, 0);
+/// A Ring (Circular) Buffer data structure for sending events from kernelspace
+/// to userspace. https://en.wikipedia.org/wiki/Circular_buffer
+///
+/// This datastructure was chosen because of eBPF's strict memory requrements.
+///
+/// A first in first out datastructure.
+/// When a value is read by userspace it is removed from the buffer.
+///
+#[map(name = "EVENTS")]
+static mut EVENTS: RingBuf = RingBuf::with_byte_size(1 << 24, 0); // 16MB
 
-/// Proper tracepoint approach - captures ALL syscalls via sys_enter
-/// This is the CORRECT way that successful Rust eBPF programs do syscall tracing
-/// Instead of raw tracepoints, use structured tracepoint access
-#[tracepoint]
-pub fn sys_enter_all(ctx: TracePointContext) -> u32 {
-    match try_capture_syscalls(ctx) {
-        Ok(_) => 0,  // Success - continue normal syscall processing
-        Err(_) => 0, // Error - but don't block syscall (just log failure)
+// bitmap allowlist - 512 covers most arch ranges
+const MAX_SYSCALLS: usize = 512;
+
+#[repr(C)]
+pub struct Event {
+    pub ts_ns: u64,      // timestamp nanoseconds
+    pub pid_tgid: u64,   // process ID thread group ID
+    pub uid_gid: u64,    // user ID group ID
+    pub syscall_id: u32, // syscall ID
+    pub enter_exit: u8,  // 0 = enter, 1 = exit
+    pub arg0: u64,
+    pub arg1: u64,
+    pub arg2: u64,
+    pub arg3: u64,
+    pub arg4: u64,
+    pub arg5: u64,
+    pub comm: [u8; 16],
+    pub retval: i64, // only valid for exits
+}
+
+#[link_section = ".rodata"]
+static ALLOWLIST: [u8; MAX_SYSCALLS] = [0; MAX_SYSCALLS];
+
+/// Capture all syscalls via sys_enter
+#[tracepoint(name = "on_sys_enter", category = "raw_syscalls")]
+pub fn on_sys_enter(ctx: TracePointContext) -> u32 {
+    match try_enter(ctx) {
+        Ok(_) => 0,
+        Err(_) => 0,
     }
 }
 
-/// PROPER syscall tracing using structured TracePointContext access
-fn try_capture_syscalls(ctx: TracePointContext) -> Result<(), i32> {
-    // Try to extract syscall number from TracePointContext
-    // For sys_enter_openat, this should be the openat syscall (257 on x86_64)
+fn try_enter(ctx: TracePointContext) -> Result<(), i64> {
+    // raw_syscalls:sys_enter args layout:
+    // long id; unsigned long args[6];
+    let id: u64 = unsafe { ctx.read_at(0)? };
+    let id = id as u32;
 
-    // Get process info using eBPF helpers (this works perfectly)
-    let pid_tgid = {
-        use aya_ebpf::helpers::bpf_get_current_pid_tgid;
-        bpf_get_current_pid_tgid()
-    };
-    let pid = (pid_tgid >> 32) as u32;
-
-    // Basic filtering - only track certain PIDs
-    if pid < 100 {
+    // early filter using allowlist
+    if (id as usize) >= MAX_SYSCALLS || ALLOWLIST[id as usize] == 0 {
         return Ok(());
     }
 
-    // Test HashMap insert - use explicit match to avoid core::fmt
-    match PID_TRACKER.insert(&pid, &1, 0) {
-        Ok(_) => {}
-        Err(_) => {} // Ignore errors without formatting
+    let mut ev = Event {
+        ts_ns: unsafe { bpf_ktime_get_ns() },
+        pid_tgid: bpf_get_current_pid_tgid(),
+        uid_gid: bpf_get_current_uid_gid(),
+        syscall_id: id,
+        enter_exit: 0,
+        arg0: unsafe { ctx.read_at(8)? },
+        arg1: unsafe { ctx.read_at(16)? },
+        arg2: unsafe { ctx.read_at(24)? },
+        arg3: unsafe { ctx.read_at(32)? },
+        arg4: unsafe { ctx.read_at(40)? },
+        arg5: unsafe { ctx.read_at(48)? },
+        comm: [0; 16],
+        retval: 0,
+    };
+    // aya_ebpf helper returns [u8;16]
+    ev.comm = bpf_get_current_comm().unwrap_or([0; 16]);
+
+    unsafe {
+        if let Some(mut rb) = EVENTS.reserve(0) {
+            // best-effort write; ignore errors to keep verifier happy
+            let ptr = rb.as_mut_ptr();
+            core::ptr::write(ptr as *mut Event, ev);
+            rb.submit(0);
+        }
     }
-
-    // Test HashMap lookup and RingBuf operations
-    match unsafe { PID_TRACKER.get(&pid) } {
-        Some(_) => match EVENT_RING.reserve(0u64) {
-            Some(mut entry) => unsafe {
-                let entry_ptr = entry.as_mut_ptr() as *mut u64;
-                *entry_ptr = pid as u64;
-                entry.submit(0u64);
-
-                use aya_ebpf::helpers::bpf_printk;
-                bpf_printk!(b"openat() called by PID: %d\0", pid);
-            },
-            None => {}
-        },
-        None => {}
-    }
-
     Ok(())
 }
 
+#[tracepoint(name = "on_sys_exit", category = "raw_syscalls")]
+pub fn on_sys_exit(ctx: TracePointContext) -> u32 {
+    match try_exit(ctx) {
+        Ok(_) => 0,
+        Err(_) => 0,
+    }
+}
+
+fn try_exit(ctx: TracePointContext) -> Result<(), i64> {
+    // raw_syscalls:sys_exit args layout:
+    // long id; long ret;
+    let id: u64 = unsafe { ctx.read_at(0)? };
+    let id = id as u32;
+
+    if (id as usize) >= MAX_SYSCALLS || ALLOWLIST[id as usize] == 0 {
+        return Ok(());
+    }
+
+    let ret: i64 = unsafe { ctx.read_at(8)? };
+
+    let mut ev = Event {
+        ts_ns: unsafe { bpf_ktime_get_ns() },
+        pid_tgid: bpf_get_current_pid_tgid(),
+        uid_gid: bpf_get_current_uid_gid(),
+        syscall_id: id,
+        enter_exit: 1,
+        arg0: 0,
+        arg1: 0,
+        arg2: 0,
+        arg3: 0,
+        arg4: 0,
+        arg5: 0,
+        comm: [0; 16],
+        retval: ret,
+    };
+    ev.comm = bpf_get_current_comm().unwrap_or([0; 16]);
+
+    unsafe {
+        if let Some(mut rb) = EVENTS.reserve(0) {
+            // best-effort write; ignore errors to keep verifier happy
+            let ptr = rb.as_mut_ptr();
+            core::ptr::write(ptr as *mut Event, ev);
+            rb.submit(0);
+        }
+    }
+    Ok(())
+}
+
+/// Your panic handler (required for compilation in no_std eBPF)
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { core::hint::unreachable_unchecked() }

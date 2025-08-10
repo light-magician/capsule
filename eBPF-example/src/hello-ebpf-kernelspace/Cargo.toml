@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 aya-ebpf = "0.1"
+common = { path = "../common" }
 
 [profile.dev]
 panic = "abort"

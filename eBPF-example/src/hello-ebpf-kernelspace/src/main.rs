@@ -3,135 +3,160 @@
 #![no_std]
 #![no_main]
 
+/// eBPF constraints:
+/// - only 512 bytes of stack (or 256 if utilizing tail calls)
+/// - no access to heap space and data must be written to maps
+/// - cannot use the std lib in C or Rust
+/// - core::fmt (formatting) may not be used and neither can traits that rely on it
+///   Ex: Display or Debug
+/// - as there is no heap, there is also no alloc or collections
+/// - cannot panic as the eBPF VM does not support stack unwinding, or abort instruction
+/// - no main function, already provided for above
 use aya_ebpf::{
-    helpers::{bpf_get_current_pid_tgid, bpf_get_current_uid_git, bpf_ktime_get_ns},
-    macros::{map, raw_tracepoint},
-    maps::{Array, HashMap, PerCpuArray, RingBuf},
+    helpers::{
+        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_ns,
+    },
+    macros::{map, tracepoint},
+    maps::{HashMap, RingBuf},
     programs::TracePointContext,
 };
 
-// ring buffer for streaming events to userspace
-// only events that survive filtering make it here
-// WHY RINGBUF:
-// - PerfEventArray has higher mem overhead (per-CPU buffers) and potential reordering.
-// - Queue / Stack Maps: don't support streaming to userspace
-// - Manual Memory Management: not available in eBPF (no malloc/free)
-// SIZE: 4MB allows ~73,000 events at 56 bytes each - sized for burst handling
-static SYSCALL_EVENTS: RingBuf = RingBuf::with_byte_size(4 * 1024 * 1024, 0); // 4MB buffer
+/// HashMap to track process ID's 1000 should be enough for now
+#[map(name = "PID_TRACKER")]
+static mut PID_TRACKER: HashMap<u32, u8> = HashMap::with_max_entries(1000, 0);
 
-// Per-CPU temporary storage to avoid eBPF's 512 byte stack limit.
-// WHY PerCpuArray instead of stack allocation:
-// - eBPF HARD LIMIT: 512 bytes total stack space per program invocation.
-// - SyscallEvent struct: 56 bytes
-// - Stack grows with local vars, function calls, and complexity
-// - Per-CPU avoids contention: ecah CPU core gets its own copy
-// WHY size 1: only need one temp event per CPU at a time
-#[map]
-static TEMP_STORAGE: PerCpuArray<SyscallEvent> = PerCpuArray::with_max_entries(1, 0);
+/// A Ring (Circular) Buffer data structure for sending events from kernelspace
+/// to userspace. https://en.wikipedia.org/wiki/Circular_buffer
+///
+/// This datastructure was chosen because of eBPF's strict memory requrements.
+///
+/// A first in first out datastructure.
+/// When a value is read by userspace it is removed from the buffer.
+///
+#[map(name = "EVENTS")]
+static mut EVENTS: RingBuf = RingBuf::with_byte_size(1 << 24, 0); // 16MB
 
-// PID based filtering map. Only monitor specific processes.
-// SIZE: 1000 processes should handle most monitoring scenarios.
-#[map]
-static MONITORED_PIDS: HashMap<u32, u8> = HashMap::with_max_entries(1000, 0);
+// bitmap allowlist - 512 covers most arch ranges
+const MAX_SYSCALLS: usize = 512;
 
-// Syscall bitmask for whitelist/blacklist filtering
-// WHY Array of u64 instead of HashMap<syscall_nr, bool>:
-// - bitwise ops are ~2-3 CPU cycles vs ~50-100ns for hash lookups
-// - 512 bits (8x64) covers all Linux syscalls (currently ~350, max 512)
-// - memory efficient: 64 bytes total vs potentially 2KB+ for HashMap
-// - cache friendly: fits in single cache line
-// LAYOUT: syscall_nr N maps to array[N/64] bit (N%64)
-#[map]
-static SYSCALL_FILTER: Arrray<u64> = Array::with_max_entries(8, 0);
-
-// Runtime configuration array for dynamic behavior control
-// Basically will be used as a small finite map with fixed indices.
-// Atomic read and write guaranteed by eBPF verifier.
-#[map]
-static FILTER_CONFIG: Array<u32> = Array::with_max_entries(4, 0);
-
-// Configuration indices - named constants for clarity
-const CFG_FILTER_MODE: usize = 0; // 0=no filter, 1=whitelist, 2=blacklist
-const CFG_PID_FILTER_MODE: usize = 1; // 0=all pids, 1=only monitored pids
-const CFG_SAMPLE_RATE: usize = 2; // 1=every call, N=every Nth call
-const CFG_EVENT_COUNTER: usize = 3; // Rolling counter for sampling
-
-// syscall number ->category mapping
-// syscall_nr:
 #[repr(C)]
-#[derive(Clone, Copy)]
-pub struct SyscallEvent {
-    pub timestamp: u64,  // nanosecond precision
-    pub pid: u32,        // process ID
-    pub tgid: u32,       // thread group ID
-    pub uid: u32,        // user ID
-    pub gid: u32,        // group ID
-    pub syscall_nr: u32, // syscall nymber
-    pub category: u8,    // syscall category bitmask
-    pub ret_value: i64,  // return value
-    pub args: [u64; 6],  // syscall arguments
+pub struct Event {
+    pub ts_ns: u64,      // timestamp nanoseconds
+    pub pid_tgid: u64,   // process ID thread group ID
+    pub uid_gid: u64,    // user ID group ID
+    pub syscall_id: u32, // syscall ID
+    pub enter_exit: u8,  // 0 = enter, 1 = exit
+    pub arg0: u64,
+    pub arg1: u64,
+    pub arg2: u64,
+    pub arg3: u64,
+    pub arg4: u64,
+    pub arg5: u64,
+    pub comm: [u8; 16],
+    pub retval: i64, // only valid for exits
 }
 
-// Main raw tracepoint captures ALL syscalls
-// If tracepoint("syscall/sys_enter_openat"):
-// - would need 300+ separate attachments for all syscalls
-// - each attachment has overhead and complexity
-// vs kprobe("__x64_sys_*"):
-// - Less stable API (kernel interal functions change)
-// - Higher overhead
-// - Architecture dependent
-// vs LSM hooks:
-// - Limited to security related syscalls
-// - doesn't capture all process/network/file ops
-#[raw_tracepoint]
-pub fn sys_enter_all(ctx: RawTracePointContext) -> u32 {
-    match try_capture_raw_syscalls(ctx) {
-        Ok(_) => 0,  // Success - continue normal syscall processing
-        Err(_) => 1, // Error - but don't block syscall (just log failure)
+#[link_section = ".rodata"]
+static ALLOWLIST: [u8; MAX_SYSCALLS] = [0; MAX_SYSCALLS];
+
+/// Capture all syscalls via sys_enter
+#[tracepoint(name = "on_sys_enter", category = "raw_syscalls")]
+pub fn on_sys_enter(ctx: TracePointContext) -> u32 {
+    match try_enter(ctx) {
+        Ok(_) => 0,
+        Err(_) => 0,
     }
 }
 
-fn try_capture_raw_syscall(ctx: RawTracePointContext) -> Result<(), i32> {
-    // extract raw syscall number
-    // Raw Tracepoint Layout: [syscall_nr, arg0, arg1, arg2, arg3, arg4, arg5]
-    // Why unsafe: eBPF verifier ensures ctx.as_ptr() is valid within program scope
-    let syscall_nr = unsafe { ctx.as_ptr().read() as u32 };
-    // get current process context
-    let pid_tgid = bpf_get_current_pid_tgid(); // atomic read from task_struct
-    let pid = (pid_tgid >> 32) as u32; // extract PID from combined value
+fn try_enter(ctx: TracePointContext) -> Result<(), i64> {
+    // raw_syscalls:sys_enter args layout:
+    // long id; unsigned long args[6];
+    let id: u64 = unsafe { ctx.read_at(0)? };
+    let id = id as u32;
 
-    //! =========================================================
-    //! PERFORMANCE CRITICAL: Filter ordering fastest to slowest
-    //! =========================================================
-    let uid_gid = bpf_get_current_uid_git();
-
-    // get per-CPU temp storage
-    let event_ptr = TEMP_STORAGE.get_ptr_mut(0).ok_or(-1)?;
-    let event = unsafe { &mut *event_ptr };
-
-
-    // populate raw event data
-    event.timesatmp = bpf_ktime_get_ns();
-    event.pid = (pid_tgid >> 32) as u32;
-    event.tgid = pid_tgid as u32;
-    event.uid = uid_gid as u32;
-    event.git = (uid_gid >> 32);
-    event.syscall_nr = syscall_nr;
-
-    // extract up to 6 syscall args
-    // raw tracepoint layout: [syscall_nr, arg0, arg1, arg2, arg3, arg4, arg5]
-    for i in 0..6 {
-        event.args[i] = unsafe { ctx.as_ptr().add(i + 1).read() as u64 };
+    // early filter using allowlist
+    if (id as usize) >= MAX_SYSCALLS || ALLOWLIST[id as usize] == 0 {
+        return Ok(());
     }
 
-    // make raw systall available to userspace via ring buffer
-    if let Some(entry) = SYSCALL_EVENTS.reserve::<SyscallEvent>(0) {
-        entry.write(*event);
-        entry.submit(0);
+    let mut ev = Event {
+        ts_ns: unsafe { bpf_ktime_get_ns() },
+        pid_tgid: bpf_get_current_pid_tgid(),
+        uid_gid: bpf_get_current_uid_gid(),
+        syscall_id: id,
+        enter_exit: 0,
+        arg0: unsafe { ctx.read_at(8)? },
+        arg1: unsafe { ctx.read_at(16)? },
+        arg2: unsafe { ctx.read_at(24)? },
+        arg3: unsafe { ctx.read_at(32)? },
+        arg4: unsafe { ctx.read_at(40)? },
+        arg5: unsafe { ctx.read_at(48)? },
+        comm: [0; 16],
+        retval: 0,
+    };
+    // aya_ebpf helper returns [u8;16]
+    ev.comm = bpf_get_current_comm().unwrap_or([0; 16]);
+
+    unsafe {
+        if let Some(mut rb) = EVENTS.reserve(0) {
+            // best-effort write; ignore errors to keep verifier happy
+            let ptr = rb.as_mut_ptr();
+            core::ptr::write(ptr as *mut Event, ev);
+            rb.submit(0);
+        }
     }
     Ok(())
 }
 
+#[tracepoint(name = "on_sys_exit", category = "raw_syscalls")]
+pub fn on_sys_exit(ctx: TracePointContext) -> u32 {
+    match try_exit(ctx) {
+        Ok(_) => 0,
+        Err(_) => 0,
+    }
+}
+
+fn try_exit(ctx: TracePointContext) -> Result<(), i64> {
+    // raw_syscalls:sys_exit args layout:
+    // long id; long ret;
+    let id: u64 = unsafe { ctx.read_at(0)? };
+    let id = id as u32;
+
+    if (id as usize) >= MAX_SYSCALLS || ALLOWLIST[id as usize] == 0 {
+        return Ok(());
+    }
+
+    let ret: i64 = unsafe { ctx.read_at(8)? };
+
+    let mut ev = Event {
+        ts_ns: unsafe { bpf_ktime_get_ns() },
+        pid_tgid: bpf_get_current_pid_tgid(),
+        uid_gid: bpf_get_current_uid_gid(),
+        syscall_id: id,
+        enter_exit: 1,
+        arg0: 0,
+        arg1: 0,
+        arg2: 0,
+        arg3: 0,
+        arg4: 0,
+        arg5: 0,
+        comm: [0; 16],
+        retval: ret,
+    };
+    ev.comm = bpf_get_current_comm().unwrap_or([0; 16]);
+
+    unsafe {
+        if let Some(mut rb) = EVENTS.reserve(0) {
+            // best-effort write; ignore errors to keep verifier happy
+            let ptr = rb.as_mut_ptr();
+            core::ptr::write(ptr as *mut Event, ev);
+            rb.submit(0);
+        }
+    }
+    Ok(())
+}
+
+/// Your panic handler (required for compilation in no_std eBPF)
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { core::hint::unreachable_unchecked() }

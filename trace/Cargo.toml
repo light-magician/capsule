@@ -9,7 +9,7 @@ default-members = ["trace", "trace-common"]
 
 [workspace.package]
 license = "MIT OR Apache-2.0"
-edition = "2024"
+edition = "2021"
 
 [workspace.dependencies]
 aya = { version = "0.13.1", default-features = false }

@@ -13,10 +13,11 @@ mount -t bpf bpf /sys/fs/bpf 2>/dev/null || true
 mount -t tracefs tracefs /sys/kernel/tracing 2>/dev/null || true
 ```
 
-verify tracepoint is active
+verify tracepoints are active on container
 
 ```bash
-grep '^syscalls:sys_enter_execve$' /sys/kernel/tracing/available_events || echo "missing tracepoint"
+grep raw_syscalls /sys/kernel/tracing/available_events
+# expect: raw_syscalls:sys_enter and raw_syscalls:sys_exit
 ```
 
 ```bash

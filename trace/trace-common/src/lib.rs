@@ -1,10 +1,17 @@
 #![no_std]
 
+/// This is a syscall event.
+///
+/// This structure is how we expect to pass syscall data
+/// from kernelspace to userspace via the ring buffer
+/// and is thus shared by both kernelspace and userspace.
 #[repr(C)]
-pub struct ExecEvent {
+pub struct Event {
+    pub ktime_ns: u64,
     pub pid: u32,
-    pub tgid: u32,
-    pub ts_ns: u64,
-    pub sys_id: i64,
-    pub comm: [u8; 16],
+    pub tid: u32,
+    pub sysno: i32,
+    pub arg0: u64,
+    pub arg1: u64,
+    pub arg2: u64,
 }

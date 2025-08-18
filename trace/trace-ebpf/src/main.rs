@@ -3,15 +3,23 @@
 
 use aya_ebpf::{
     helpers::{bpf_get_current_pid_tgid, bpf_ktime_get_ns }, 
-    macros::{map, tracepoint},
+    macros::{map, tracepoint, raw_tracepoint},
     maps::ring_buf::RingBuf, 
     maps::HashMap,
-    programs::TracePointContext,
+    programs::{TracePointContext, RawTracePointContext},
+    EbpfContext
 };
-
 use trace_common::Event;
 
-// ================== MAPS =======================
+// ===== placeholder for CO-RE =====
+#[allow(non_camel_case_types)]
+#[repr(C)]
+pub struct task_struct {
+    pub tgid: u32,
+    // … rest is opaque
+}
+
+// ============================== COLLECTIONS =================================
 
 // PIDs we are watching (root and all descendants)
 #[map(name = "EVENTS")]
@@ -19,20 +27,81 @@ static mut EVENTS: RingBuf = RingBuf::with_byte_size(4096 * 64, 0); // multiple 
 
 /// Track watched PIDs (key=id, val=1). Userspace seeds the root PID
 #[map(name = "WATCHED_PIDS")]
-static mut WATCHED_PIDS: HashMap<u32, u8> = HashMap::with_max_entries(1000, 0);
+static mut WATCHED_PIDS: HashMap<u32, u8> = HashMap::with_max_entries(1024, 0);
+
+// ============================= RAW TRACEPOINTS ===============================
+
+// NOTE: to find offset run 
+// cat /sys/kernel/debug/tracing/events/raw_syscalls/sys_enter/format 
+// on your kernel
+#[raw_tracepoint(tracepoint = "sys_enter")]
+pub fn sys_enter(ctx: RawTracePointContext) -> u32 {
+    unsafe {
+        // bpf_raw_tracepoint_args: args[0] = id, args[1] = pointer to args[6]
+        let base = <RawTracePointContext as EbpfContext>::as_ptr(&ctx) as *const u64;
+
+        let id = core::ptr::read(base.add(0)) as u32;
+        let args_ptr = core::ptr::read(base.add(1)) as *const u64;
+
+        let a0 = core::ptr::read(args_ptr.add(0));
+        let a1 = core::ptr::read(args_ptr.add(1));
+        let a2 = core::ptr::read(args_ptr.add(2));
+
+        submit_event_enter(id, a0, a1, a2);
+    }
+    0
+}
+
+// NOTE: to find offset run 
+// cat /sys/kernel/debug/tracing/events/raw_syscalls/sys_enter/format 
+// on your kernel
+#[raw_tracepoint(tracepoint = "sys_exit")]
+pub fn sys_exit(ctx: RawTracePointContext) -> u32 {
+    unsafe {
+        // bpf_raw_tracepoint_args: args[0] = id, args[1] = ret
+        let base = <RawTracePointContext as EbpfContext>::as_ptr(&ctx) as *const u64;
+
+        let id  = core::ptr::read(base.add(0)) as u32;
+        let ret = core::ptr::read(base.add(1));
+
+        submit_event_exit(id, ret);
+    }
+    0
+}
+
+// ================================ TRACEPOINTS =================================
+
+// sched_process_fork: parent_pid, child_pid
+#[tracepoint(category = "sched", name = "sched_process_fork")]
+pub fn sched_fork(ctx: TracePointContext) -> u32 {
+    unsafe {
+        let (parent_pid, child_pid) = read_sched_fork_pids(&ctx);
+        if WATCHED_PIDS.get(&parent_pid).is_some() {
+            let _ = WATCHED_PIDS.insert(&child_pid, &1, 0);
+        }
+    }
+    0
+}
+
+// sched_process_exit: pid
+#[tracepoint(category = "sched", name = "sched_process_exit")]
+pub fn sched_exit(ctx: TracePointContext) -> u32 {
+    unsafe {
+        let pid = read_sched_exit_pid(&ctx);
+        let _ = WATCHED_PIDS.remove(&pid);
+    }
+    0
+}
 
 
-// =================== HELPERS ===================
-// --- shared proc-only filter (x86_64) ---
-#[inline(always)]
-fn is_process_syscall_x86_64(sysno: u32) -> bool {
-    // clone,fork,vfork,execve,execveat,exit,exit_group
-    matches!(sysno, 56 | 57 | 58 | 59 | 322 | 60 | 231) 
-}
-#[inline(always)]
-fn pid_is_watched(tgid: u32) -> bool {
-    unsafe { WATCHED_PIDS.get(&tgid).is_some() }
-}
+// ========================== HELPERS =====================================
+
+// NOTE: these offsets are for kernel 6.10.14-linuxkit
+// For other kernels, offsets must be found with 
+// cat /sys/kernel/debug/tracing/events/sched/.../format 
+// and passed down by userspace. 
+
+// =======================================================================
 
 // raw_syscalls:sys_enter layout (x86_64):
 //   id @ +8 (u64), args[0..5] @ +16,+24,+32,+40,+48,+56
@@ -57,72 +126,27 @@ fn read_ret_raw_exit(ctx: &TracePointContext) -> u64 {
     unsafe { ctx.read_at::<u64>(16).unwrap_or(0) }
 }
 
-// sched:sched_process_fork (x86_64 common):
-//   parent_tgid @ +36 (u32), child_tgid @ +60 (u32)
+// sched:sched_process_fork
 #[inline(always)]
-fn read_sched_fork_tgids(ctx: &TracePointContext) -> (u32, u32) {
-    let parent = unsafe { ctx.read_at::<u32>(36).unwrap_or(0) };
-    let child  = unsafe { ctx.read_at::<u32>(60).unwrap_or(0) };
+fn read_sched_fork_pids(ctx: &TracePointContext) -> (u32, u32) {
+    let parent = unsafe { ctx.read_at::<i32>(24).unwrap_or(0) } as u32;
+    let child  = unsafe { ctx.read_at::<i32>(44).unwrap_or(0) } as u32;
     (parent, child)
 }
 
-// sched:sched_process_exit:
-//   tgid @ +36 (u32)
 #[inline(always)]
-fn read_sched_exit_tgid(ctx: &TracePointContext) -> u32 {
-    unsafe { ctx.read_at::<u32>(36).unwrap_or(0) }
+fn read_sched_exit_pid(ctx: &TracePointContext) -> u32 {
+    unsafe { ctx.read_at::<i32>(24).unwrap_or(0) as u32 }
 }
 
-///// NOTE: These offsets are going to have to be programmed for every instruction set
-//#[inline(always)]
-//unsafe fn submit_event(ctx: &TracePointContext) {
-//    // only process syscalls we care about from the watcehd PIDs
-//    let sysno: u32 = unsafe { ctx.read_at(0)}
-//    let pid_tid = bpf_get_current_pid_tgid();
-//    let pid = (pid_tid >> 32) as u32; // tgid
-//    if !is_proc_syscall(sysno as u32) || !pid_is_watched(pid) {
-//        return; // skip
-//    }
-//
-//    // we just have the raw event, and we know how much space each
-//    // field takes, so we can manually alight the Event struct fields
-//    if let Some(mut e) = EVENTS.reserve::<Event>(0) {
-//        let pid_tid = bpf_get_current_pid_tgid();
-//        let sysno   = ctx.read_at::<i64>(0).unwrap_or_default();
-//        let a0      = ctx.read_at::<u64>(8).unwrap_or_default();
-//        let a1      = ctx.read_at::<u64>(16).unwrap_or_default();
-//        let a2      = ctx.read_at::<u64>(24).unwrap_or_default();
-//
-//        // Initialize the MaybeUninit<Event> in one shot:
-//        (*e).write(Event {
-//            ktime_ns: bpf_ktime_get_ns(),
-//            pid:      (pid_tid >> 32) as u32,
-//            tid:      pid_tid as u32,
-//            sysno:    sysno as i32,
-//            arg0:     a0,
-//            arg1:     a1,
-//            arg2:     a2,
-//        });
-//
-//        // Publish entry to ring buffer
-//        e.submit(0);
-//    }
-//}
-
 #[inline(always)]
-unsafe fn submit_event_enter(ctx: &TracePointContext) {
+unsafe fn submit_event_enter(sysno: u32, a0: u64, a1: u64, a2: u64) {
     let pid_tid = bpf_get_current_pid_tgid();
     let tgid = (pid_tid >> 32) as u32;
 
-    let sysno = read_sysno_raw_enter(ctx);
-    if !pid_is_watched(tgid) || !is_process_syscall_x86_64(sysno) {
-        return;
-    }
-
-    // define the args before using them
-    let a0 = read_arg_raw_enter(ctx, 0);
-    let a1 = read_arg_raw_enter(ctx, 1);
-    let a2 = read_arg_raw_enter(ctx, 2);
+    //if !pid_is_watched(tgid) || !is_process_syscall_x86_64(sysno) {
+    //    return;
+    //}
 
     if let Some(mut slot) = EVENTS.reserve::<Event>(0) {
         let ev = Event {
@@ -134,20 +158,19 @@ unsafe fn submit_event_enter(ctx: &TracePointContext) {
             arg1:     a1, 
             arg2:     a2,
         };
-        slot.write(ev);   // <-- this is the correct call
-        slot.submit(0);
+        slot.write(ev); // fills the memory
+        slot.submit(0); // submits it so that userspace can read
     }
 }
 
 #[inline(always)]
-unsafe fn submit_event_exit(ctx: &TracePointContext) {
+unsafe fn submit_event_exit(sysno: u32, ret: u64) {
     let pid_tid = bpf_get_current_pid_tgid();
     let tgid = (pid_tid >> 32) as u32;
 
-    let sysno = read_sysno_raw_exit(ctx);
-    if !pid_is_watched(tgid) || !is_process_syscall_x86_64(sysno) {
-        return;
-    }
+    //if !pid_is_watched(tgid) || !is_process_syscall_x86_64(sysno) {
+    //    return;
+    //}
 
     if let Some(mut slot) = EVENTS.reserve::<Event>(0) {
         // For exits, store return value in arg0; arg1/arg2 = 0
@@ -156,7 +179,7 @@ unsafe fn submit_event_exit(ctx: &TracePointContext) {
             pid:      tgid,
             tid:      pid_tid as u32,
             sysno:    sysno as i32,
-            arg0:     read_ret_raw_exit(ctx),
+            arg0:     ret,
             arg1:     0,
             arg2:     0,
         };
@@ -167,42 +190,6 @@ unsafe fn submit_event_exit(ctx: &TracePointContext) {
 
 
 
-// ========= TRACEPOINTS =============
-
-// All syscalls enter
-#[tracepoint(name = "tp_sys_enter_raw", category = "raw_syscalls")]
-pub fn tp_sys_enter_raw(ctx: TracePointContext) -> u32 {
-    unsafe { submit_event_enter(&ctx) };
-    0
-}
-
-// All syscalls exit
-#[tracepoint(name = "tp_sys_exit_raw", category = "raw_syscalls")]
-pub fn tp_sys_exit_raw(ctx: TracePointContext) -> u32 {
-    unsafe { submit_event_exit(&ctx) };
-    0
-}
-
-// Track descendants
-#[tracepoint(name = "tp_sched_process_fork", category = "sched")]
-pub fn tp_sched_process_fork(ctx: TracePointContext) -> u32 {
-    let (parent_tgid, child_tgid) = read_sched_fork_tgids(&ctx);
-    unsafe {
-        if WATCHED_PIDS.get(&parent_tgid).is_some() {
-            let _ = WATCHED_PIDS.insert(&child_tgid, &1, 0);
-        }
-    }
-    0
-}
-
-#[tracepoint(name = "tp_sched_process_exit", category = "sched")]
-pub fn tp_sched_process_exit(ctx: TracePointContext) -> u32 {
-    let tgid = read_sched_exit_tgid(&ctx);
-    unsafe {
-        let _ = WATCHED_PIDS.remove(&tgid);
-    }
-    0
-}
 
 // =========== BOILERPLATE ===============
 

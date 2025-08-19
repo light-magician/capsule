@@ -2,12 +2,11 @@
 #![no_main]
 
 use aya_ebpf::{
-    helpers::{bpf_get_current_pid_tgid, bpf_ktime_get_ns }, 
-    macros::{map, tracepoint, raw_tracepoint},
-    maps::ring_buf::RingBuf, 
-    maps::HashMap,
-    programs::{TracePointContext, RawTracePointContext},
-    EbpfContext
+    helpers::{bpf_get_current_pid_tgid, bpf_ktime_get_ns, bpf_probe_read_kernel},
+    macros::{map, raw_tracepoint, tracepoint},
+    maps::{ring_buf::RingBuf, HashMap},
+    programs::{RawTracePointContext, TracePointContext},
+    EbpfContext,
 };
 use trace_common::Event;
 
@@ -37,15 +36,16 @@ static mut WATCHED_PIDS: HashMap<u32, u8> = HashMap::with_max_entries(1024, 0);
 #[raw_tracepoint(tracepoint = "sys_enter")]
 pub fn sys_enter(ctx: RawTracePointContext) -> u32 {
     unsafe {
-        // bpf_raw_tracepoint_args: args[0] = id, args[1] = pointer to args[6]
+        // ctx is struct bpf_raw_tracepoint_args*; ctx->args[0]=id, ctx->args[1]=unsigned long *args
         let base = <RawTracePointContext as EbpfContext>::as_ptr(&ctx) as *const u64;
 
         let id = core::ptr::read(base.add(0)) as u32;
         let args_ptr = core::ptr::read(base.add(1)) as *const u64;
 
-        let a0 = core::ptr::read(args_ptr.add(0));
-        let a1 = core::ptr::read(args_ptr.add(1));
-        let a2 = core::ptr::read(args_ptr.add(2));
+        // args_ptr is a kernel pointer → must probe-read
+        let a0 = bpf_probe_read_kernel(args_ptr).unwrap_or(0);
+        let a1 = bpf_probe_read_kernel(args_ptr.add(1)).unwrap_or(0);
+        let a2 = bpf_probe_read_kernel(args_ptr.add(2)).unwrap_or(0);
 
         submit_event_enter(id, a0, a1, a2);
     }
@@ -58,11 +58,10 @@ pub fn sys_enter(ctx: RawTracePointContext) -> u32 {
 #[raw_tracepoint(tracepoint = "sys_exit")]
 pub fn sys_exit(ctx: RawTracePointContext) -> u32 {
     unsafe {
-        // bpf_raw_tracepoint_args: args[0] = id, args[1] = ret
         let base = <RawTracePointContext as EbpfContext>::as_ptr(&ctx) as *const u64;
 
-        let id  = core::ptr::read(base.add(0)) as u32;
-        let ret = core::ptr::read(base.add(1));
+        let id  = core::ptr::read(base.add(0)) as u32;  // ctx->args[0] = id
+        let ret = core::ptr::read(base.add(1)) as u64;  // ctx->args[1] = return (value, not ptr)
 
         submit_event_exit(id, ret);
     }

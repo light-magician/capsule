@@ -4,6 +4,19 @@ this project is practice to hone the details on the eBPF
 portion of the `capsule-runtime` project. This is done
 solely because
 
+### configuration
+
+You may notice that aya makes your editor
+not able to recognize your rust code. I
+had to run
+
+```bash
+rustup override set nightly
+```
+
+in the project base to get the
+rust-analyzer LSP to work with aya.
+
 ### running
 
 have to mount (done at startup in Dockerfile)

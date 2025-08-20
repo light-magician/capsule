@@ -24,8 +24,8 @@ pub struct task_struct {
 #[map(name = "EVENTS")]
 static mut EVENTS: RingBuf = RingBuf::with_byte_size(4096 * 64, 0); // multiple of page size
 
-/// Track watched PIDs (key=id, val=1). Userspace seeds the root PID
-#[map(name = "WATCHED_PIDS")]
+/// Track watched TGIDs (key=tgid, val=1). Userspace seeds the root TGID
+#[map(name = "WATCHED_TGIDS")]
 static mut WATCHED_TGIDS: HashMap<u32, u8> = HashMap::with_max_entries(1024, 0);
 
 // ============================= RAW TRACEPOINTS ===============================

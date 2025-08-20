@@ -39,19 +39,3 @@ pub struct ProcEvent {
 /// scope modes (shared so userspace and kernelspace agree)
 pub const MODE_ALL: u32 = 0;
 pub const MODE_CGROUP: u32 = 0;
-
-// Minimal process-syscall set for x86_64
-#[inline(always)]
-pub const fn is_process_syscall_x86_64(n: u32) -> bool {
-    match n {
-        56 | // clone 
-        57 | // fork
-        58 | // vfork
-        59 | // execve
-        322 | // execveat
-        60 | // exit 
-        231  // exit_group
-        => true,
-        _ => false,
-    }
-}

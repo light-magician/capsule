@@ -26,7 +26,7 @@ static mut EVENTS: RingBuf = RingBuf::with_byte_size(4096 * 64, 0); // multiple 
 
 /// Track watched PIDs (key=id, val=1). Userspace seeds the root PID
 #[map(name = "WATCHED_PIDS")]
-static mut WATCHED_PIDS: HashMap<u32, u8> = HashMap::with_max_entries(1024, 0);
+static mut WATCHED_TGIDS: HashMap<u32, u8> = HashMap::with_max_entries(1024, 0);
 
 // ============================= RAW TRACEPOINTS ===============================
 
@@ -75,8 +75,8 @@ pub fn sys_exit(ctx: RawTracePointContext) -> u32 {
 pub fn sched_fork(ctx: TracePointContext) -> u32 {
     unsafe {
         let (parent_pid, child_pid) = read_sched_fork_pids(&ctx);
-        if WATCHED_PIDS.get(&parent_pid).is_some() {
-            let _ = WATCHED_PIDS.insert(&child_pid, &1, 0);
+        if WATCHED_TGIDS.get(&parent_pid).is_some() {
+            let _ = WATCHED_TGIDS.insert(&child_pid, &1, 0);
         }
     }
     0
@@ -87,7 +87,7 @@ pub fn sched_fork(ctx: TracePointContext) -> u32 {
 pub fn sched_exit(ctx: TracePointContext) -> u32 {
     unsafe {
         let pid = read_sched_exit_pid(&ctx);
-        let _ = WATCHED_PIDS.remove(&pid);
+        let _ = WATCHED_TGIDS.remove(&pid);
     }
     0
 }
@@ -140,12 +140,24 @@ fn read_sched_exit_pid(ctx: &TracePointContext) -> u32 {
 
 #[inline(always)]
 unsafe fn submit_event_enter(sysno: u32, a0: u64, a1: u64, a2: u64) {
+    // In a single threaded program the TGID and PID might look like 12341234
+    // where TIGD and PID are the same. In a multithreaded program it might look
+    // like 11111234 where there is a Proces ID 1234 in a Thread Group 1111.
+    // bpf_get_current_pid_tgid returns 64-bit value 
+    // the high 32 bits is the TGID (process ID from userspace perspective)
+    // the low 32 bits = PID (thread ID from userspace perspective)
     let pid_tid = bpf_get_current_pid_tgid();
-    let tgid = (pid_tid >> 32) as u32;
+    let tgid = (pid_tid >> 32) as u32; // extract high 32 bits (TGID)
 
-    //if !pid_is_watched(tgid) || !is_process_syscall_x86_64(sysno) {
-    //    return;
-    //}
+    if !is_tgid_watched(tgid) || !is_syscall_supported(sysno) {
+        return;
+    }
+
+    // TODO: Need a way to generally configure clone syscall numbers rather than hardcoding
+    // Handle clone syscalls (both clone and clone3 on aarch64)
+    if sysno == 220 || sysno == 435 { // clone or clone3 syscall on aarch64
+        handle_clone_syscall(sysno, a0);
+    }
 
     if let Some(mut slot) = EVENTS.reserve::<Event>(0) {
         let ev = Event {
@@ -167,9 +179,16 @@ unsafe fn submit_event_exit(sysno: u32, ret: u64) {
     let pid_tid = bpf_get_current_pid_tgid();
     let tgid = (pid_tid >> 32) as u32;
 
-    //if !pid_is_watched(tgid) || !is_process_syscall_x86_64(sysno) {
-    //    return;
-    //}
+    // Only track syscalls for watched processes and supported syscalls
+    if !is_tgid_watched(tgid) || !is_syscall_supported(sysno) {
+        return;
+    }
+
+    // TODO: Need a way to generally configure clone syscall numbers rather than hardcoding
+    // Handle successful clone returns to add child TGID to watch list
+    if sysno == 220 || sysno == 435 { // clone or clone3 syscall on aarch64
+        handle_clone_return(ret);
+    }
 
     if let Some(mut slot) = EVENTS.reserve::<Event>(0) {
         // For exits, store return value in arg0; arg1/arg2 = 0
@@ -187,7 +206,63 @@ unsafe fn submit_event_exit(sysno: u32, ret: u64) {
     }
 }
 
+unsafe fn is_tgid_watched(tgid: u32) -> bool {
+    WATCHED_TGIDS.get(&tgid).is_some()
+}
 
+// handle clone syscall
+// TODO: no vars params used ??
+unsafe fn handle_clone_syscall(_sysno: u32, _flags: u64) {
+    let pid_tid = bpf_get_current_pid_tgid();
+    let parent_tgid = (pid_tid >> 32) as u32;
+    // only track clones from watched processes
+    if !is_tgid_watched(parent_tgid) {
+        return;
+    }
+    // For clone syscalls, we need to wait for the return
+    // valude to get child PID. This weill be handled in sys_exit 
+    // when clone returns with a child PID.
+}
+
+// handle successful clone return to add child PID 
+unsafe fn handle_clone_return(ret: u64) {
+    let pid_tid = bpf_get_current_pid_tgid();
+    let parent_tgid = (pid_tid >> 32) as u32;
+    // only track if if parent is watched and clone succeeded
+    if is_tgid_watched(parent_tgid) && ret > 0 && ret < 0x7fffffff {
+        let child_pid = ret as u32;
+        let _ = WATCHED_TGIDS.insert(&child_pid, &1, 0);
+    }
+}
+
+
+
+// Minimal process-syscall set for aarch64 
+// TODO: need a process to determine instruction set and 
+//       and shift to syscall numbers based on that set.
+//       run `uname -m` on the system to view instruction set.
+#[inline(always)]
+pub const fn is_syscall_supported(sysno: u32) -> bool {
+    // NOTE: right now onyl process syscalls are supported
+    is_process_syscall_aarch64(sysno)
+}
+
+// Process-related syscalls for aarch64 (ARM64)
+// run this on system to view syscall numbers for process related syscalls 
+// grep -E "(clone|fork|vfork|execve|execveat|exit|exit_group)" /usr/include/asm-generic/unistd.h
+#[inline(always)]
+pub const fn is_process_syscall_aarch64(n: u32) -> bool {
+  match n {
+      220 | // clone 
+      435 | // clone3 (newer clone syscall)
+      221 | // execve
+      281 | // execveat
+      93 |  // exit 
+      94    // exit_group
+      => true,
+      _ => false,
+  }
+}
 
 
 // =========== BOILERPLATE ===============

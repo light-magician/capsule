@@ -16,6 +16,12 @@ pub struct Event {
     pub arg2: u64,
 }
 
+/// Phases for ProcEvent::phase
+pub const PHASE_ENTER: u8 = 0;
+pub const PHASE_EXIT: u8 = 1;
+pub const PHASE_TASK_EXIT: u8 = 2;
+
+/// ProcEvent is a process related event.
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct ProcEvent {
@@ -23,10 +29,9 @@ pub struct ProcEvent {
     pub ts_ns: u64,
     // task (thread) ID and thread group id
     pub pid: u32,
-    pub tid: u32,
+    pub tgid: u32,
     // syscall number (x86_64). For sched_exit this will be 0
-    pub sysno: u32,
-    // 0 = sys_enter, 1 = sys_exit, 2 = sched_process_exit
+    pub sysno: u32, // 0 = sys_enter, 1 = sys_exit, 2 = sched_process_exit
     pub phase: u8,
     pub _pad: [u8; 3],
 }
@@ -34,19 +39,3 @@ pub struct ProcEvent {
 /// scope modes (shared so userspace and kernelspace agree)
 pub const MODE_ALL: u32 = 0;
 pub const MODE_CGROUP: u32 = 0;
-
-// Minimal process-syscall set for x86_64
-#[inline(always)]
-pub const fn is_process_syscall_x86_64(n: u32) -> bool {
-    match n {
-        56 | // clone 
-        57 | // fork
-        58 | // vfork
-        59 | // execve
-        322 | // execveat
-        60 | // exit 
-        231  // exit_group
-        => true,
-        _ => false,
-    }
-}

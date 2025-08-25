@@ -252,6 +252,10 @@ pub const fn is_syscall_supported(sysno: u32) -> bool {
 // grep -E "(clone|fork|vfork|execve|execveat|exit|exit_group)" /usr/include/asm-generic/unistd.h
 #[inline(always)]
 pub const fn is_process_syscall_aarch64(n: u32) -> bool {
+    /*
+     * fork/vfork
+    * 
+     */
   match n {
       220 | // clone 
       435 | // clone3 (newer clone syscall)

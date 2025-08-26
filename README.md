@@ -33,16 +33,16 @@ At `Ghostlock, Corp.` we belive that:
 1. Phase 1: **Kernel Monitoring** - CURRENTLY IMPLEMENTING
 
 - kernel tracing of:
-  process execution
-  netowrk
-  file I/O
-  credentials
-  memory
-  IPC orchestration
-  device access
-  system configuration
-  containers and cgroups
-  signals
+  Process execution: When programs start, spawn helpers, or change their powers.
+  Network: All communication over the network—who talks to whom.
+  File I/O: Reading, writing, creating, deleting, or moving files and folders.
+  Credentials: Changes to “who you are” from the OS’s point of view.
+  Memory/code: How a program maps and protects its memory—especially risky combos.
+  IPC orchestration: How programs talk to each other on the same machine.
+  Device access: Touching special hardware or virtual devices under /dev.
+  System configuration: Attempts to reshape the system’s view of files or bootstrapping.
+  Containers & cgroups: Entering/leaving sandboxes and changing resource limits.
+  Signals: Software “interrupts” used to control processes.
 - human-readable summary of actions streamed to userspace in real time
 - detailed logging stored in log files
 

@@ -7,6 +7,7 @@ Made by Ghostlock, Corp.
 **Capsule** is a security and observability runtime for AI agents that traces system calls and resource usage in the **operating system kernel** and emits **human-reabable**, **real-time** logs of agent actions.
 
 > Status: **Pre-alpha**.
+> Supported Systems: ✅ aarch64 ❌ x86_64
 
 ---
 

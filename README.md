@@ -1,9 +1,6 @@
-Here’s your README rewritten to your exact spec—spelling fixed, one-liner promise under the H1, badges added, Quickstart and TL;DR moved up, code-fence replaced with a clean table, architecture path note, Linux aarch64 notes, support matrix, and placeholders where you said you’ll add content later. I kept your links in the “Why” section.
-
-````markdown
 # Capsule
 
-_Trace agents from the kernel. Human readable reports. Dynamic security policy._
+Trace agents from the kernel. Human readable reports. Dynamic security policy.
 
 ![status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)
 ![arch: aarch64](https://img.shields.io/badge/arch-aarch64-blue)
@@ -34,7 +31,6 @@ Capsule watches agent behavior from the kernel (eBPF/LSM), enriches events into 
 sudo apt-get update && sudo apt-get install -y \
   clang llvm libelf-dev linux-headers-$(uname -r) build-essential pkg-config
 ```
-````
 
 **Build & run**
 
@@ -188,8 +184,3 @@ PRs welcome. Please file issues with kernel version, distro, and repro steps. Th
 
 - **License:** TBD
 - **Code of Conduct:** coming soon
-
-```
-
-::contentReference[oaicite:0]{index=0}
-```

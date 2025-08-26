@@ -18,8 +18,8 @@ At `Ghostlock, Corp.` we belive that:
 - Agents will become the basis of an increasing amount of human computer interaction over the next decade.
 - Agents will have increasing autonomy to write code to solve problems and make descisions in critical situations with less human oversight over time.
 - Monitoring the behavior and intent of intelligent agents will become a major part of the human role in computing based pursuits, at work and at home.
-- The application layer is trivially easy for an attacker or intelligent AI to circumvent, and observability and security tools that only run in userspace are effectively useless in an era approaching some version of AGI.
-- Attackers will have increasing access to powerful models that will be able to analyze systems and networks for vulnerabilities, essentially making complex cybercrimes as accessible as scam calls are today.
+- The [application layer](https://www.first.org/resources/papers/telaviv2019/Ensilo-Omri-Misgav-Udi-Yavo-Analyzing-Malware-Evasion-Trend-Bypassing-User-Mode-Hooks.pdf) is trivially easy for an attacker or intelligent AI to circumvent, and observability and security tools that only run in userspace are effectively useless in an era approaching some version of AGI.
+- Attackers will have increasing access to powerful models that will be able to [analyze systems and networks for vulnerabilities](https://arxiv.org/abs/2404.08144), essentially making complex cybercrimes as accessible as scam calls are today. Similar concerns have been raised by [DeepMind](https://deepmind.google/discover/blog/evaluating-potential-cybersecurity-threats-of-advanced-ai/) and observed by [Google](https://therecord.media/google-llm-sqlite-vulnerability-artificial-intelligence); see also recent work on teams of LLM agents exploiting zero-day [vulnerabilities/exploits](https://arxiv.org/html/2406.01637v2).
 - Companies, even in highly regulated sectors, still have insufficient or inconsistent observability trails for the software they rely on and sell. This will become a huge issue in the near future as powerful AI models become more widly adopted and understood.
 - Kernel level tracing is not accessible enough, requiring too much configuration and system level knowledge to get started.
 
@@ -27,7 +27,7 @@ At `Ghostlock, Corp.` we belive that:
 
 - **Kernel Probes**: eBPF kprobes/tracepoints/LSM hooks (Linux) capture syscall-level and semantic events.
 - **Userspace Daemon**: stream ingestioin, async enrichment of syscall for better readability
-- **Policy/ML Layer**: deterministic rules + sequence graph model that categoriezes prompt, syscall sequence and resource utilization combinations as risky or harmless.
+- **Policy/ML Layer**: deterministic rules + sequence graph model that categoriezes prompt, [syscall sequence](https://arxiv.org/abs/1808.01717) and resource utilization combinations as risky or harmless.
 
 ### Roadmap
 
@@ -39,6 +39,7 @@ At `Ghostlock, Corp.` we belive that:
   Process execution: When programs start, spawn helpers, or change their powers.
   Network: All communication over the network—who talks to whom.
   File I/O: Reading, writing, creating, deleting, or moving files and folders.
+tos
   Credentials: Changes to “who you are” from the OS’s point of view.
   Memory/code: How a program maps and protects its memory—especially risky combos.
   IPC orchestration: How programs talk to each other on the same machine.

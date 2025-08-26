@@ -1,82 +1,33 @@
 # Capsule
 
+_Trace agents from the kernel. Human readable reports. Dynamic security policy._
+
+![status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)
+![arch: aarch64](https://img.shields.io/badge/arch-aarch64-blue)
+![platform: linux](https://img.shields.io/badge/platform-Linux-green)
+![license: tbd](https://img.shields.io/badge/license-TBD-lightgrey)
+
 Kernel-First Security and Observability for AI Agents
 
 Made by Ghostlock, Corp.
 
-**Capsule** is a security and observability runtime for AI agents that traces system calls and resource usage in the **operating system kernel** and emits **human-reabable**, **real-time** logs of agent actions.
-
-> Status: **Pre-alpha**.
-> Supported Systems: ✅ aarch64 ❌ x86_64
+**Capsule** is a security and observability runtime for AI agents that traces system calls and resource usage in the **operating system kernel** and emits **human-readable**, **real-time** logs of agent actions.
 
 ---
 
-### Why we are building Capsule
+## TL;DR
 
-At `Ghostlock, Corp.` we belive that:
+Capsule watches agent behavior from the kernel (eBPF/LSM), enriches events into human-readable timelines, and lays the groundwork for dynamic, policy-driven security backed by small ML models. It’s **pre-alpha**, **Linux aarch64 only** right now, written in **Rust**.
 
-- Agents will become the basis of an increasing amount of human computer interaction over the next decade.
-- Agents will have increasing autonomy to write code to solve problems and make descisions in critical situations with less human oversight over time.
-- Monitoring the behavior and intent of intelligent agents will become a major part of the human role in computing based pursuits, at work and at home.
-- The [application layer](https://www.first.org/resources/papers/telaviv2019/Ensilo-Omri-Misgav-Udi-Yavo-Analyzing-Malware-Evasion-Trend-Bypassing-User-Mode-Hooks.pdf) is trivially easy for an attacker or intelligent AI to circumvent, and observability and security tools that only run in userspace are effectively useless in an era approaching some version of AGI.
-- Attackers will have increasing access to powerful models that will be able to [analyze systems and networks for vulnerabilities](https://arxiv.org/abs/2404.08144), essentially making complex cybercrimes as accessible as scam calls are today. Similar concerns have been raised by [DeepMind](https://deepmind.google/discover/blog/evaluating-potential-cybersecurity-threats-of-advanced-ai/) and observed by [Google](https://therecord.media/google-llm-sqlite-vulnerability-artificial-intelligence); see also recent work on teams of LLM agents exploiting zero-day [vulnerabilities/exploits](https://arxiv.org/html/2406.01637v2).
-- Companies, even in highly regulated sectors, still have insufficient or inconsistent observability trails for the software they rely on and sell. This will become a huge issue in the near future as powerful AI models become more widly adopted and understood.
-- Kernel level tracing is not accessible enough, requiring too much configuration and system level knowledge to get started.
+---
 
-### Architecture
+## Quickstart
 
-- **Kernel Probes**: eBPF kprobes/tracepoints/LSM hooks (Linux) capture syscall-level and semantic events.
-- **Userspace Daemon**: stream ingestioin, async enrichment of syscall for better readability
-- **Policy/ML Layer**: deterministic rules + sequence graph model that categoriezes prompt, [syscall sequence](https://arxiv.org/abs/1808.01717) and resource utilization combinations as risky or harmless.
+> Works today on **Linux aarch64** only.
 
-### Roadmap
-
-1. Phase 1: **Kernel Monitoring** - CURRENTLY IMPLEMENTING
-
-- kernel tracing of:
-
-```text
-  Process execution: When programs start, spawn helpers, or change their powers.
-  Network: All communication over the network—who talks to whom.
-  File I/O: Reading, writing, creating, deleting, or moving files and folders.
-tos
-  Credentials: Changes to “who you are” from the OS’s point of view.
-  Memory/code: How a program maps and protects its memory—especially risky combos.
-  IPC orchestration: How programs talk to each other on the same machine.
-  Device access: Touching special hardware or virtual devices under /dev.
-  System configuration: Attempts to reshape the system’s view of files or bootstrapping.
-  Containers & cgroups: Entering/leaving sandboxes and changing resource limits.
-  Signals: Software “interrupts” used to control processes.
-```
-
-- human-readable summary of actions streamed to userspace in real time
-- detailed logging stored in log files
-
-2. Phase 2: **Queryability / Summary Rollup / Static Security / Risk Assessment** -- FUTURE
-
-- report rollups to various regulatory framework templaces (SOC2, ect.) or to custom configus
-  so that auditing agent actions is effortless
-- capsule.yml files for static seccomp cofiguration
-- potential risk sequences reported to user in live watch, risk log file, and can be easily added
-  to capsule.yml security profile
-
-3. Phase 3: **Dynamic Security Policy Enforcement** - FUTURE
-
-- Risk sequences are dynamcially flagged based on sequences of syscall + resource utilization
-  deemed to be outside the bounds of
-
-### Build and Run
-
-`cd capsule`
-`cargo build --release`
+**Prerequisites (Ubuntu/Debian)**
 
 ```bash
-capsule run claude
-capsule run codex
-capsule run gemini
-capsule run python3 agent.py
+sudo apt-get update && sudo apt-get install -y \
+  clang llvm libelf-dev linux-headers-$(uname -r) build-essential pkg-config
 ```
-
-### Contributing
-
-PRs welcome. Please file issues with kernel version, distro, and repro steps. Threat research, policy packs, and dataset contributions are especially valuable.

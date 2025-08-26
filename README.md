@@ -21,6 +21,20 @@ Capsule watches agent behavior from the kernel (eBPF/LSM), enriches events into 
 
 ---
 
+## Why we are building Capsule
+
+At Ghostlock, Corp., we believe that:
+
+- Agents will become the basis of an increasing amount of human–computer interaction over the next decade.
+- Agents will have increasing autonomy to write code to solve problems and make decisions in critical situations with less human oversight over time.
+- Monitoring the behavior and intent of intelligent agents will become a major part of the human role in computing-based pursuits, at work and at home.
+- The [application layer](https://www.first.org/resources/papers/telaviv2019/Ensilo-Omri-Misgav-Udi-Yavo-Analyzing-Malware-Evasion-Trend-Bypassing-User-Mode-Hooks.pdf) is trivially easy for an attacker or intelligent AI to circumvent, and observability and security tools that only run in userspace are effectively useless in an era approaching some version of AGI.
+- Attackers will have increasing access to powerful models that will be able to [analyze systems and networks for vulnerabilities](https://arxiv.org/abs/2404.08144), essentially making complex cybercrimes as accessible as scam calls are today. Similar concerns have been raised by [DeepMind](https://deepmind.google/discover/blog/evaluating-potential-cybersecurity-threats-of-advanced-ai/) and observed by [Google](https://therecord.media/google-llm-sqlite-vulnerability-artificial-intelligence); see also recent work on teams of LLM agents exploiting zero-day [vulnerabilities/exploits](https://arxiv.org/html/2406.01637v2).
+- Companies, even in highly regulated sectors, still have insufficient or inconsistent observability trails for the software they rely on and sell. This will become a huge issue in the near future as powerful AI models become more widely adopted and understood.
+- Kernel-level tracing is not accessible enough, requiring too much configuration and system-level knowledge to get started.
+
+---
+
 ## Quickstart
 
 > Works today on **Linux aarch64** only.
@@ -39,20 +53,10 @@ sudo apt-get update && sudo apt-get install -y \
 cargo build --release
 
 # Run a process under Capsule (examples)
-sudo ./target/release/capsule run python3 agent.py
-# sudo ./target/release/capsule run claude
-# sudo ./target/release/capsule run codex
-# sudo ./target/release/capsule run gemini
-```
-
-**Example output**
-
-```text
-[12:01:03.412] P4321 (python3) execve argv=["python3","agent.py"] cwd=/home/user image_sha256=...
-[12:01:03.513] P4321 openat path=./data/config.yaml flags=O_RDONLY -> FD 3
-[12:01:03.544] P4321 connect FD 5 -> tcp 142.251.32.110:443 (dns=www.googleapis.com)
-[12:01:03.612] P4321 mmap addr=0x7f... perm=RWX  ⚠ W+X mapping
-[12:01:03.745] P4321 write FD 1 bytes=128 "summary: ..."
+capsule run python3 agent.py
+capsule run claude
+capsule run codex
+capsule run gemini
 ```
 
 ---
@@ -61,7 +65,7 @@ sudo ./target/release/capsule run python3 agent.py
 
 | Area                 | In plain terms                                              |
 | -------------------- | ----------------------------------------------------------- |
-| Process execution    | When programs start, spawn helpers, or change power.        |
+| Process execution    | When programs start, fork, or become backgroud processes    |
 | Network              | All network communication—who talks to whom.                |
 | File I/O             | Read/write/create/delete/move files and folders.            |
 | Credentials          | Changes to identity (UID/GID/capabilities).                 |
@@ -85,30 +89,11 @@ _Diagram coming soon._
 
 ---
 
-## Security posture
-
-> _Placeholder — you said you’ll add the “can & can’t do” details later (limitations + integrity model)._
-
----
-
 ## Roadmap
 
 1. Phase 1: **Kernel Monitoring** - CURRENTLY IMPLEMENTING
 
-- kernel tracing of:
-  - Process execution: When programs start, spawn helpers, or change their powers.
-  - Network: All communication over the network—who talks to whom.
-  - File I/O: Reading, writing, creating, deleting, or moving files and folders.
-  - Credentials: Changes to “who you are” from the OS’s point of view.
-  - Memory/code: How a program maps and protects its memory—especially risky combos.
-  - IPC orchestration: How programs talk to each other on the same machine.
-  - Device access: Touching special hardware or virtual devices under /dev.
-  - System configuration: Attempts to reshape the system’s view of files or bootstrapping.
-  - Containers & cgroups: Entering/leaving sandboxes and changing resource limits.
-  - Signals: Software “interrupts” used to control processes.
-
 - human-readable summary of actions streamed to userspace in real time
-
 - detailed logging stored in log files
 
 2. Phase 2: **Queryability / Summary Rollup / Static Security / Risk Assessment** — FUTURE
@@ -123,20 +108,6 @@ _Diagram coming soon._
 
 - Risk sequences are dynamically flagged based on sequences of syscall + resource utilization
   deemed to be outside the bounds of
-
----
-
-## Why we are building Capsule
-
-At Ghostlock, Corp., we believe that:
-
-- Agents will become the basis of an increasing amount of human–computer interaction over the next decade.
-- Agents will have increasing autonomy to write code to solve problems and make decisions in critical situations with less human oversight over time.
-- Monitoring the behavior and intent of intelligent agents will become a major part of the human role in computing-based pursuits, at work and at home.
-- The [application layer](https://www.first.org/resources/papers/telaviv2019/Ensilo-Omri-Misgav-Udi-Yavo-Analyzing-Malware-Evasion-Trend-Bypassing-User-Mode-Hooks.pdf) is trivially easy for an attacker or intelligent AI to circumvent, and observability and security tools that only run in userspace are effectively useless in an era approaching some version of AGI.
-- Attackers will have increasing access to powerful models that will be able to [analyze systems and networks for vulnerabilities](https://arxiv.org/abs/2404.08144), essentially making complex cybercrimes as accessible as scam calls are today. Similar concerns have been raised by [DeepMind](https://deepmind.google/discover/blog/evaluating-potential-cybersecurity-threats-of-advanced-ai/) and observed by [Google](https://therecord.media/google-llm-sqlite-vulnerability-artificial-intelligence); see also recent work on teams of LLM agents exploiting zero-day [vulnerabilities/exploits](https://arxiv.org/html/2406.01637v2).
-- Companies, even in highly regulated sectors, still have insufficient or inconsistent observability trails for the software they rely on and sell. This will become a huge issue in the near future as powerful AI models become more widely adopted and understood.
-- Kernel-level tracing is not accessible enough, requiring too much configuration and system-level knowledge to get started.
 
 ---
 

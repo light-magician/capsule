@@ -34,6 +34,8 @@ At `Ghostlock, Corp.` we belive that:
 1. Phase 1: **Kernel Monitoring** - CURRENTLY IMPLEMENTING
 
 - kernel tracing of:
+
+```text
   Process execution: When programs start, spawn helpers, or change their powers.
   Network: All communication over the network—who talks to whom.
   File I/O: Reading, writing, creating, deleting, or moving files and folders.
@@ -44,6 +46,8 @@ At `Ghostlock, Corp.` we belive that:
   System configuration: Attempts to reshape the system’s view of files or bootstrapping.
   Containers & cgroups: Entering/leaving sandboxes and changing resource limits.
   Signals: Software “interrupts” used to control processes.
+```
+
 - human-readable summary of actions streamed to userspace in real time
 - detailed logging stored in log files
 

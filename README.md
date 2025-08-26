@@ -1,59 +1,76 @@
 # Capsule
 
-<img src="capsule-flavor-art.png" alt="Capsule logo" width="500" />
+Kernel-First Security and Observability for AI Agents
 
-Capsule is an open‑core security runtime designed for teams embedding agents into production workflows. It compiles a human‑readable `capsule.yaml` policy into an OS‑native sandbox (Seccomp on Linux, Seatbelt on macOS), executes each agent tool invocation under that fine‑grained syscall filter, and writes a tamper‑evident Merkle–chained audit log of every action.
+Made by Ghostlock, Corp.
 
-Most “typical” secirity mitigations sit outside the agent—Kubernetes NetworkPolicy, Cloudflare Gateway, seccomp templates, ANSI scrubbers in web consoles, etc. Capsule fuses those layers into one declarative policy that
-(1) is stored, versioned, and hashed alongside code,
-(2) yields a Merkle-chained syscall log you can replay, and
-(3) reloads live without a container rebuild. For teams that already maintain strong infra controls, Capsule is complementary (adds syscall-level proof and simpler audit). For green-field agent startups it’s often strict-superset coverage with far less YAML sprawl.
+**Capsule** is a security and observability runtime for AI agents that traces system calls and resource usage in the **operating system kernel** and emits **human-reabable, **real-time\*\* logs of agent actions.
 
-## Who Is Capsule For?
+> Status: **Pre-alpha**.
 
-- **AI Platform Engineers & DevOps** who need to safely integrate untrusted AI agents into CI/CD, cloud and on‑prem environments without proliferating bespoke container or VM configurations.
-- **Security & Compliance Teams** that require cryptographic audit trails of every automated task an agent performs, with verifiable detection of tampering or unauthorized calls.
-- **Dev Teams & Data Scientists** demanding low‑latency, local execution of AI assistants on sensitive codebases or customer data, without surrendering security controls to opaque container runtimes or high‑privilege daemons.
+---
 
-## Problem
+### Why we are building Capsule
 
-As organizations race to embed AI agents directly into their code, infrastructure and data‑processing pipelines, they face an explosion of fragmented sandboxing and logging solutions:
+At `Ghostlock, Corp.` we belive that:
 
-1. **Containers & VMs** ship broad syscall whitelists by default, leaving unknown kernel interfaces exposed and requiring cumbersome image maintenance.
-2. **Custom seccomp rules** are often scattered across projects, lacking a unified policy language or automated audit logging.
-3. **Opaque agent runtimes** obscure what code and syscalls an AI can invoke, undermining compliance and forensic investigations.
+- Agents will become the basis of an increasing amount of human computer interaction over the next decade.
+- Agents will have increasing autonomy to write code to solve problems and make descisions in critical situations with less human oversight over time.
+- Monitoring the behavior and intent of intelligent agents will become a major part of the human role in computing based pursuits, at work and at home.
+- The application layer is trivially easy for an attacker or intelligent AI to circumvent, and observability and security tools that only run in userspace are effectively useless in an era approaching some version of AGI.
+- Attackers will have increasing access to powerful models that will be able to analyze systems and networks for vulnerabilities, essentially making complex cybercrimes as accessible as scam calls are today.
+- Companies, even in highly regulated sectors, still have insufficient or inconsistent observability trails for the software they rely on and sell. This will become a huge issue in the near future as powerful AI models become more widly adopted and understood.
+- Kernel level tracing is not accessible enough, requiring too much configuration and system level knowledge to get started.
 
-These gaps create critical attack vectors—arbitrary code execution, covert data exfiltration via unconventional syscalls, privilege escalation through forgotten interfaces, and undetectable post‑hoc tampering of audit records.
+### Architecture
 
-## What Capsule Offers
+- **Kernel Probes**: eBPF kprobes/tracepoints/LSM hooks (Linux) capture syscall-level and semantic events.
+- **Userspace Daemon**: stream ingestioin, async enrichment of syscall for better readability
+- **Policy/ML Layer**: deterministic rules + sequence graph model that categoriezes prompt, syscall sequence and resource utilization combinations as risky or harmless.
 
-- **Human‑Readable Policy, Machine‑Enforced**: Define a concise YAML policy once (`capsule.yaml`). The Python SDK validates syntax and emits a JSON policy for the Rust CLI.
-- **Syscall‑Level Isolation**: Seccomp‑BPF filters in the kernel enforce only the syscalls your agents need—no containers, no extra daemons, minimal overhead and no hidden gaps.
-- **Cryptographic Audit Trail**: Every invocation and syscall event is appended to `capsule.log` as a Blake3–Merkle chain. Any insertion, deletion or modification is immediately detectable via `capsule verify`.
-- **Unified Tooling**: The same `capsule run` CLI and `@capsule.tool` Python decorator handle policy enforcement, sandbox setup, execution, logging and verification—no scattered scripts.
+### Roadmap
 
-_Compared to stitching together Dockerfiles, custom AppArmor profiles, and ad‑hoc loggers, Capsule offers a consolidated, end‑to‑end security architecture that’s easier to reason about, lighter to maintain, and stronger against kernel‑level exploits._
+1. Phase 1: **Kernel Monitoring** - CURRENTLY IMPLEMENTING
 
-## Development Environment
+- kernel tracing of:
+  Process execution: When programs start, spawn helpers, or change their powers.
+  Network: All communication over the network—who talks to whom.
+  File I/O: Reading, writing, creating, deleting, or moving files and folders.
+  Credentials: Changes to “who you are” from the OS’s point of view.
+  Memory/code: How a program maps and protects its memory—especially risky combos.
+  IPC orchestration: How programs talk to each other on the same machine.
+  Device access: Touching special hardware or virtual devices under /dev.
+  System configuration: Attempts to reshape the system’s view of files or bootstrapping.
+  Containers & cgroups: Entering/leaving sandboxes and changing resource limits.
+  Signals: Software “interrupts” used to control processes.
+- human-readable summary of actions streamed to userspace in real time
+- detailed logging stored in log files
 
-### Supabase Database Dashboard
+2. Phase 2: **Queryability / Summary Rollup / Static Security / Risk Assessment** -- FUTURE
 
-For development and testing, the integration environment includes a Supabase instance with a web-based SQL editor and AI-powered query capabilities:
+- report rollups to various regulatory framework templaces (SOC2, ect.) or to custom configus
+  so that auditing agent actions is effortless
+- capsule.yml files for static seccomp cofiguration
+- potential risk sequences reported to user in live watch, risk log file, and can be easily added
+  to capsule.yml security profile
 
-**Access:** http://localhost:8000 (when running `docker-compose up` in the `integration/` directory)
+3. Phase 3: **Dynamic Security Policy Enforcement** - FUTURE
 
-**Features:**
-- **AI SQL Editor**: Ask natural language questions like "show me all network events from the most recent run"
-- **Table Browser**: View and edit database tables
-- **Real-time Data**: Live updates as `capsule send` commands populate the database
-- **Query History**: Save and organize frequently used queries
+- Risk sequences are dynamcially flagged based on sequences of syscall + resource utilization
+  deemed to be outside the bounds of
 
-**Quick Start:**
+### Build and Run
+
+`cd capsule`
+`cargo build --release`
+
 ```bash
-cd integration/
-docker-compose up -d
-# Access dashboard at http://localhost:8000
+capsule run claude
+capsule run codex
+capsule run gemini
+capsule run python3 agent.py
 ```
 
-This provides a powerful interface for analyzing Capsule run data, debugging agent behavior, and creating custom reports without writing complex SQL queries.
-EOF < /dev/null
+### Contributing
+
+PRs welcome. Please file issues with kernel version, distro, and repro steps. Threat research, policy packs, and dataset contributions are especially valuable.

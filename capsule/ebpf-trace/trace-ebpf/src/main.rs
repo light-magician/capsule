@@ -36,18 +36,26 @@ static mut WATCHED_TGIDS: HashMap<u32, u8> = HashMap::with_max_entries(1024, 0);
 #[raw_tracepoint(tracepoint = "sys_enter")]
 pub fn sys_enter(ctx: RawTracePointContext) -> u32 {
     unsafe {
-        // ctx is struct bpf_raw_tracepoint_args*; ctx->args[0]=id, ctx->args[1]=unsigned long *args
+        // ctx is struct bpf_raw_tracepoint_args*;
+        //   args[0] = syscall id (u64)
+        //   args[1] = pointer to args array (unsigned long[6])
+        // This is stable across aarch64/x86_64; avoid per-kernel tracepoint offsets.
         let base = <RawTracePointContext as EbpfContext>::as_ptr(&ctx) as *const u64;
 
         let id = core::ptr::read(base.add(0)) as u32;
         let args_ptr = core::ptr::read(base.add(1)) as *const u64;
 
-        // args_ptr is a kernel pointer → must probe-read
+        // args_ptr is a kernel pointer → must probe-read each element
+        // TODO(arch): unsigned long is 64-bit on aarch64/x86_64. If targeting 32-bit,
+        //             read as u32 and widen to u64 as needed.
         let a0 = bpf_probe_read_kernel(args_ptr).unwrap_or(0);
         let a1 = bpf_probe_read_kernel(args_ptr.add(1)).unwrap_or(0);
         let a2 = bpf_probe_read_kernel(args_ptr.add(2)).unwrap_or(0);
+        let a3 = bpf_probe_read_kernel(args_ptr.add(3)).unwrap_or(0);
+        let a4 = bpf_probe_read_kernel(args_ptr.add(4)).unwrap_or(0);
+        let a5 = bpf_probe_read_kernel(args_ptr.add(5)).unwrap_or(0);
 
-        submit_event_enter(id, a0, a1, a2);
+        submit_event_enter(id, [a0, a1, a2, a3, a4, a5]);
     }
     0
 }
@@ -139,7 +147,7 @@ fn read_sched_exit_pid(ctx: &TracePointContext) -> u32 {
 }
 
 #[inline(always)]
-unsafe fn submit_event_enter(sysno: u32, a0: u64, a1: u64, a2: u64) {
+unsafe fn submit_event_enter(sysno: u32, args: [u64; 6]) {
     // In a single threaded program the TGID and PID might look like 12341234
     // where TIGD and PID are the same. In a multithreaded program it might look
     // like 11111234 where there is a Proces ID 1234 in a Thread Group 1111.
@@ -165,9 +173,14 @@ unsafe fn submit_event_enter(sysno: u32, a0: u64, a1: u64, a2: u64) {
             pid:      tgid,
             tid:      pid_tid as u32,
             sysno:    sysno as i32,
-            arg0:     a0,
-            arg1:     a1, 
-            arg2:     a2,
+            phase:    trace_common::PHASE_ENTER,
+            _pad:     [0u8; 3],
+            arg0:     args[0],
+            arg1:     args[1],
+            arg2:     args[2],
+            arg3:     args[3],
+            arg4:     args[4],
+            arg5:     args[5],
         };
         slot.write(ev); // fills the memory
         slot.submit(0); // submits it so that userspace can read
@@ -191,15 +204,20 @@ unsafe fn submit_event_exit(sysno: u32, ret: u64) {
     }
 
     if let Some(mut slot) = EVENTS.reserve::<Event>(0) {
-        // For exits, store return value in arg0; arg1/arg2 = 0
+        // For exits, store return value in arg0; zero the rest
         let ev = Event {
             ktime_ns: bpf_ktime_get_ns(),
             pid:      tgid,
             tid:      pid_tid as u32,
             sysno:    sysno as i32,
+            phase:    trace_common::PHASE_EXIT,
+            _pad:     [0u8; 3],
             arg0:     ret,
             arg1:     0,
             arg2:     0,
+            arg3:     0,
+            arg4:     0,
+            arg5:     0,
         };
         slot.write(ev);           
         slot.submit(0);

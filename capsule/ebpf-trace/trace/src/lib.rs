@@ -8,6 +8,11 @@ use aya::{
 };
 use log::{debug, warn};
 
+// TODO(async-enrich): Add a dedicated async task to consume the ring buffer and
+// perform minimal parsing/enrichment, forwarding compact structs over a bounded
+// channel/broadcast. Keep per-event work light to reduce time spent per syscall
+// handoff and avoid additional context switching beyond the ring buffer read.
+
 pub fn remove_locked_mem_limit() -> Result<()> {
     // rlimit bump
     let rlim = libc::rlimit {

@@ -1,5 +1,10 @@
 #![no_std]
 
+#[cfg(feature = "user")]
+extern crate alloc;
+#[cfg(feature = "user")]
+use alloc::{string::String, vec::Vec};
+
 /// This is a syscall event.
 ///
 /// This structure is how we expect to pass syscall data
@@ -10,6 +15,7 @@
 /// TODO: expand to support more arguments.
 /// phase is 0 = enter, 1 = exit
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct RawSyscallEvent {
     pub ktime_ns: u64,
     pub pid: u32,
@@ -22,6 +28,7 @@ pub struct RawSyscallEvent {
     pub _pad: [u8; 7],
 }
 
+#[cfg(feature = "user")]
 #[derive(Debug, Clone, Default)]
 pub enum SyscallEnrichment {
     #[default]
@@ -41,6 +48,17 @@ pub enum SyscallEnrichment {
         flags_decoded: Vec<String>,
         stack_ptr: Option<u64>,
     },
+}
+
+/// Enriched syscall with userspace context
+#[cfg(feature = "user")]
+#[derive(Debug, Clone)]
+pub struct EnrichedSyscall {
+    // Raw kernel data
+    pub raw: RawSyscallEvent,
+
+    // Enriched data (populated in userspace)
+    pub enrichment: SyscallEnrichment,
 }
 
 /// Phases for ProcEvent::phase

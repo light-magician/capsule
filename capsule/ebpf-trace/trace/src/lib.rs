@@ -2,10 +2,11 @@ use std::{process::Command, thread, time::Duration};
 
 use anyhow::{anyhow, Result};
 use aya::{
-    maps::{HashMap as AyaHashMap, MapData},
+    maps::{HashMap as AyaHashMap, MapData, RingBuf},
     programs::{RawTracePoint, TracePoint},
     Ebpf,
 };
+use trace_common::RawSyscallEvent;
 use log::{debug, warn};
 
 pub fn remove_locked_mem_limit() -> Result<()> {
@@ -128,4 +129,14 @@ pub fn verify_child_tracked(
         }
     }
     Err(anyhow!("failed to find child TGID in 50 iterations"))
+}
+
+pub fn connect_events_ringbuf(ebpf: &mut Ebpf) -> Result<RingBuf<&mut MapData>> {
+    // open EVENTS ring buffer
+    eprintln!("[map] opening EVENTS ring buffer");
+    let events_map = ebpf
+        .map_mut("EVENTS")
+        .ok_or_else(|| anyhow!("map not found: EVENTS"))?;
+    let ring_buf = RingBuf::try_from(events_map)?;
+    Ok(ring_buf)
 }

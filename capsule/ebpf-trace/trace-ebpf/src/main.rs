@@ -8,7 +8,7 @@ use aya_ebpf::{
     programs::{RawTracePointContext, TracePointContext},
     EbpfContext,
 };
-use trace_common::Event;
+use trace_common::RawSyscallEvent;
 
 // ===== placeholder for CO-RE =====
 #[allow(non_camel_case_types)]
@@ -159,8 +159,8 @@ unsafe fn submit_event_enter(sysno: u32, a0: u64, a1: u64, a2: u64) {
         handle_clone_syscall(sysno, a0);
     }
 
-    if let Some(mut slot) = EVENTS.reserve::<Event>(0) {
-        let ev = Event {
+    if let Some(mut slot) = EVENTS.reserve::<RawSyscallEvent>(0) {
+        let ev = RawSyscallEvent {
             ktime_ns: bpf_ktime_get_ns(),
             pid:      tgid,
             tid:      pid_tid as u32,
@@ -168,6 +168,8 @@ unsafe fn submit_event_enter(sysno: u32, a0: u64, a1: u64, a2: u64) {
             arg0:     a0,
             arg1:     a1, 
             arg2:     a2,
+            phase:    0,  // PHASE_ENTER
+            _pad:     [0; 7],
         };
         slot.write(ev); // fills the memory
         slot.submit(0); // submits it so that userspace can read
@@ -190,9 +192,9 @@ unsafe fn submit_event_exit(sysno: u32, ret: u64) {
         handle_clone_return(ret);
     }
 
-    if let Some(mut slot) = EVENTS.reserve::<Event>(0) {
+    if let Some(mut slot) = EVENTS.reserve::<RawSyscallEvent>(0) {
         // For exits, store return value in arg0; arg1/arg2 = 0
-        let ev = Event {
+        let ev = RawSyscallEvent {
             ktime_ns: bpf_ktime_get_ns(),
             pid:      tgid,
             tid:      pid_tid as u32,
@@ -200,6 +202,8 @@ unsafe fn submit_event_exit(sysno: u32, ret: u64) {
             arg0:     ret,
             arg1:     0,
             arg2:     0,
+            phase:    1,  // PHASE_EXIT
+            _pad:     [0; 7],
         };
         slot.write(ev);           
         slot.submit(0);

@@ -33,6 +33,19 @@ grep raw_syscalls /sys/kernel/tracing/available_events
 # expect: raw_syscalls:sys_enter and raw_syscalls:sys_exit
 ```
 
+Syscall numbers are relative to chipset architecture.
+Here is how you can check yours to see if it is supported
+
+```bash
+# Check architecture of the current system
+uname -m
+# More detailed architecture info
+lscpu | grep Architecture
+
+# Check what the container is running on
+cat /proc/cpuinfo | grep -E "(processor|model name|architecture)"
+```
+
 ```bash
 cargo build --release
 RUST_LOG=info ./target/release/trace

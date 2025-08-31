@@ -2,7 +2,7 @@ use anyhow::Result;
 use aya::maps::RingBuf;
 use tokio::io::unix::AsyncFd;
 use trace::{
-    attach_tracepoints, connect_ebpf_bridge, connect_events_ringbuf, execute_cmd_and_seed_cmd_pid,
+    attach_tracepoints, connect_ebpf_bridge, connect_events_ringbuf, enrich_syscall, execute_cmd_and_seed_cmd_pid,
     remove_locked_mem_limit, setup_ebpf, verify_child_tracked,
 };
 use trace_common::{EnrichedSyscall, RawSyscallEvent, SyscallEnrichment};
@@ -70,18 +70,28 @@ async fn read_events_async(
                 // Update userspace PID tracking based on syscalls
                 update_tracked_pids(&mut tracked_pids, &raw_event);
 
-                // Simple enrichment for now - just wrap in EnrichedSyscall
-                let enriched = EnrichedSyscall {
-                    raw: raw_event,
-                    enrichment: SyscallEnrichment::None, // TODO: implement actual enrichment
-                };
+                // Enrich the syscall with full lookup and decoding
+                let enriched = enrich_syscall(raw_event);
 
                 println!(
-                    "Raw syscall: pid={}, sysno={}, phase={}, arg0=0x{:x} | Tracking {} PIDs",
-                    enriched.raw.pid,
+                    "Syscall: {} ({}), pid={}, phase={}, arg0=0x{:x} | Enriched: {:?} | Tracking {} PIDs",
+                    enriched.syscall_name,
                     enriched.raw.sysno,
-                    enriched.raw.phase,
+                    enriched.raw.pid,
+                    enriched.phase_name(),
                     enriched.raw.arg0,
+                    match enriched.enrichment {
+                        SyscallEnrichment::None => "None".to_string(),
+                        SyscallEnrichment::Exit { status, is_group } => 
+                            format!("Exit(status={}, group={})", status, is_group),
+                        SyscallEnrichment::Clone { flags_decoded, .. } => 
+                            format!("Clone(flags={:?})", flags_decoded),
+                        SyscallEnrichment::Kill { signal_name, is_thread, .. } => 
+                            format!("Kill(signal={}, thread={})", signal_name, is_thread),
+                        SyscallEnrichment::ProcessInfo { info_type, result } => 
+                            format!("Info({}={})", info_type, result),
+                        _ => "Other".to_string(),
+                    },
                     tracked_pids.len()
                 );
             }

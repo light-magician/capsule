@@ -25,6 +25,20 @@ pub use aarch64_syscalls::Aarch64Syscalls;
 /// TODO: expand to support more arguments.
 /// phase is 0 = enter, 1 = exit
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RawSyscallEvent {
+    pub ktime_ns: u64,
+    pub pid: u32,
+    pub tid: u32,
+    pub sysno: i32,
+    pub arg0: u64, // raw pointer
+    pub arg1: u64, // raw pointer
+    pub arg2: u64, // raw pointer
+    pub phase: u8, // 0=enter, 1=exit
+    pub _pad: [u8; 7],
+}
+
+#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct RawSysEventV1 {
     pub ktime_ns: u64,

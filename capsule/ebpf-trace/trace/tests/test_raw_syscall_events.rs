@@ -1,13 +1,12 @@
 use std::{collections::HashMap, time::Duration};
 
 use anyhow::Result;
-use aya::maps::RingBuf;
 use tokio::{io::unix::AsyncFd, time::timeout};
 use trace::{
     attach_tracepoints, connect_ebpf_bridge, connect_events_ringbuf, execute_cmd_and_seed_cmd_pid,
     remove_locked_mem_limit, setup_ebpf, verify_child_tracked,
 };
-use trace_common::{EnrichedSyscall, RawSyscallEvent, SyscallEnrichment, PHASE_ENTER, PHASE_EXIT};
+use trace_common::{EnrichedSyscall, RawSyscallEvent, SyscallDetails, PHASE_ENTER, PHASE_EXIT};
 
 /// Integration test for the complete eBPF syscall capture pipeline. This validates that 
 /// the kernel eBPF code can successfully emit RawSyscallEvent structs to the ring buffer
@@ -92,7 +91,9 @@ async fn test_raw_syscall_event_reading() -> Result<()> {
                     // Test enrichment wrapper
                     let enriched = EnrichedSyscall {
                         raw: raw_event,
-                        enrichment: SyscallEnrichment::None,
+                        syscall_name: "unknown".to_string(),
+                        syscall_enum: None,
+                        enrichment: SyscallDetails::None,
                     };
 
                     assert_eq!(enriched.raw.pid, raw_event.pid);
@@ -261,18 +262,23 @@ fn test_enrichment_data_structures() {
     // Test EnrichedSyscall with different enrichment types
     let enriched = EnrichedSyscall {
         raw: raw_event,
-        enrichment: SyscallEnrichment::Exec {
+        syscall_name: "execve".to_string(),
+        syscall_enum: Some(trace_common::Aarch64Syscalls::Execve),
+        enrichment: SyscallDetails::Exec {
             filename: "/bin/ls".to_string(),
             argv: vec!["ls".to_string(), "-la".to_string()],
             envp: vec!["PATH=/bin".to_string()],
+            dirfd: None,
+            flags: None,
         },
     };
 
     match enriched.enrichment {
-        SyscallEnrichment::Exec {
+        SyscallDetails::Exec {
             filename,
             argv,
             envp,
+            ..
         } => {
             assert_eq!(filename, "/bin/ls");
             assert_eq!(argv.len(), 2);
@@ -286,22 +292,28 @@ fn test_enrichment_data_structures() {
     // Test Clone enrichment
     let clone_enriched = EnrichedSyscall {
         raw: raw_event,
-        enrichment: SyscallEnrichment::Clone {
+        syscall_name: "clone".to_string(),
+        syscall_enum: Some(trace_common::Aarch64Syscalls::Clone),
+        enrichment: SyscallDetails::Clone {
             flags: 0x00000100,
             flags_decoded: vec!["CLONE_VM".to_string()],
-            stack_ptr: Some(0x7fff12340000),
+            stack_ptr: Some(0x12340000),
+            parent_tid_ptr: None,
+            child_tid_ptr: None,
+            tls_ptr: None,
         },
     };
 
     match clone_enriched.enrichment {
-        SyscallEnrichment::Clone {
+        SyscallDetails::Clone {
             flags,
             flags_decoded,
             stack_ptr,
+            ..
         } => {
             assert_eq!(flags, 0x00000100);
             assert_eq!(flags_decoded[0], "CLONE_VM");
-            assert_eq!(stack_ptr, Some(0x7fff12340000));
+            assert_eq!(stack_ptr, Some(0x12340000));
         }
         _ => panic!("Expected Clone enrichment"),
     }

@@ -6,7 +6,7 @@ use aya::{
     programs::{RawTracePoint, TracePoint},
     Ebpf,
 };
-use trace_common::{Aarch64Syscalls, EnrichedSyscall, RawSyscallEvent, SyscallEnrichment};
+use trace_common::{Aarch64Syscalls, EnrichedSyscall, RawSyscallEvent, SyscallDetails};
 use log::{debug, warn};
 
 pub fn remove_locked_mem_limit() -> Result<()> {
@@ -154,20 +154,20 @@ pub fn enrich_syscall(raw: RawSyscallEvent) -> EnrichedSyscall {
     if let Some(syscall_enum) = enriched.syscall_enum {
         enriched.enrichment = match syscall_enum {
             Aarch64Syscalls::Exit => {
-                SyscallEnrichment::Exit {
+                SyscallDetails::Exit {
                     status: raw.arg0 as i32,
                     is_group: false,
                 }
             }
             Aarch64Syscalls::ExitGroup => {
-                SyscallEnrichment::Exit {
+                SyscallDetails::Exit {
                     status: raw.arg0 as i32,
                     is_group: true,
                 }
             }
             Aarch64Syscalls::Clone => {
                 let flags = raw.arg0;
-                SyscallEnrichment::Clone {
+                SyscallDetails::Clone {
                     flags,
                     flags_decoded: decode_clone_flags(flags),
                     stack_ptr: if raw.arg1 != 0 { Some(raw.arg1) } else { None },
@@ -178,7 +178,7 @@ pub fn enrich_syscall(raw: RawSyscallEvent) -> EnrichedSyscall {
             }
             Aarch64Syscalls::Execve => {
                 // For now, just mark as exec - memory reading will be added later
-                SyscallEnrichment::Exec {
+                SyscallDetails::Exec {
                     filename: format!("<ptr:0x{:x}>", raw.arg0),
                     argv: vec![format!("<argv_ptr:0x{:x}>", raw.arg1)],
                     envp: vec![format!("<envp_ptr:0x{:x}>", raw.arg2)],
@@ -187,7 +187,7 @@ pub fn enrich_syscall(raw: RawSyscallEvent) -> EnrichedSyscall {
                 }
             }
             Aarch64Syscalls::Execveat => {
-                SyscallEnrichment::Exec {
+                SyscallDetails::Exec {
                     filename: format!("<ptr:0x{:x}>", raw.arg1),
                     argv: vec![format!("<argv_ptr:0x{:x}>", raw.arg2)],
                     envp: vec![], // arg2 in execveat
@@ -197,7 +197,7 @@ pub fn enrich_syscall(raw: RawSyscallEvent) -> EnrichedSyscall {
             }
             Aarch64Syscalls::Kill => {
                 let signal = raw.arg1 as i32;
-                SyscallEnrichment::Kill {
+                SyscallDetails::Kill {
                     pid: raw.arg0 as i32,
                     signal,
                     signal_name: signal_name(signal),
@@ -207,7 +207,7 @@ pub fn enrich_syscall(raw: RawSyscallEvent) -> EnrichedSyscall {
             }
             Aarch64Syscalls::Tkill => {
                 let signal = raw.arg1 as i32;
-                SyscallEnrichment::Kill {
+                SyscallDetails::Kill {
                     pid: raw.arg0 as i32,
                     signal,
                     signal_name: signal_name(signal),
@@ -217,7 +217,7 @@ pub fn enrich_syscall(raw: RawSyscallEvent) -> EnrichedSyscall {
             }
             Aarch64Syscalls::Tgkill => {
                 let signal = raw.arg2 as i32;
-                SyscallEnrichment::Kill {
+                SyscallDetails::Kill {
                     pid: raw.arg0 as i32,
                     signal,
                     signal_name: signal_name(signal),
@@ -226,25 +226,25 @@ pub fn enrich_syscall(raw: RawSyscallEvent) -> EnrichedSyscall {
                 }
             }
             Aarch64Syscalls::GetPid => {
-                SyscallEnrichment::ProcessInfo {
+                SyscallDetails::ProcessInfo {
                     result: raw.arg0 as u32,
                     info_type: "pid".to_string(),
                 }
             }
             Aarch64Syscalls::GetPpid => {
-                SyscallEnrichment::ProcessInfo {
+                SyscallDetails::ProcessInfo {
                     result: raw.arg0 as u32,
                     info_type: "ppid".to_string(),
                 }
             }
             Aarch64Syscalls::GetTid => {
-                SyscallEnrichment::ProcessInfo {
+                SyscallDetails::ProcessInfo {
                     result: raw.arg0 as u32,
                     info_type: "tid".to_string(),
                 }
             }
             Aarch64Syscalls::Wait4 => {
-                SyscallEnrichment::Wait {
+                SyscallDetails::Wait {
                     pid: raw.arg0 as i32,
                     status_ptr: if raw.arg1 != 0 { Some(raw.arg1) } else { None },
                     options: raw.arg2 as u32,
@@ -253,7 +253,7 @@ pub fn enrich_syscall(raw: RawSyscallEvent) -> EnrichedSyscall {
                 }
             }
             Aarch64Syscalls::Waitid => {
-                SyscallEnrichment::Wait {
+                SyscallDetails::Wait {
                     pid: raw.arg1 as i32,
                     status_ptr: if raw.arg2 != 0 { Some(raw.arg2) } else { None },
                     options: raw.arg0 as u32, // idtype is in arg0 for waitid
@@ -261,7 +261,38 @@ pub fn enrich_syscall(raw: RawSyscallEvent) -> EnrichedSyscall {
                     rusage_ptr: None,
                 }
             }
-            _ => SyscallEnrichment::None,
+            Aarch64Syscalls::SetPgid => {
+                SyscallDetails::ProcessInfo {
+                    result: raw.arg1 as u32, // pgid
+                    info_type: format!("setpgid(pid={}, pgid={})", raw.arg0, raw.arg1),
+                }
+            }
+            Aarch64Syscalls::GetPgid => {
+                SyscallDetails::ProcessInfo {
+                    result: raw.arg0 as u32, // pid argument
+                    info_type: format!("getpgid(pid={})", raw.arg0),
+                }
+            }
+            Aarch64Syscalls::GetSid => {
+                SyscallDetails::ProcessInfo {
+                    result: raw.arg0 as u32, // pid argument  
+                    info_type: format!("getsid(pid={})", raw.arg0),
+                }
+            }
+            Aarch64Syscalls::SetSid => {
+                SyscallDetails::ProcessInfo {
+                    result: 0, // setsid takes no arguments
+                    info_type: "setsid".to_string(),
+                }
+            }
+            Aarch64Syscalls::Prctl => {
+                SyscallDetails::ProcessInfo {
+                    result: raw.arg1 as u32,
+                    info_type: format!("prctl(option={}, arg2=0x{:x})", 
+                                     decode_prctl_option(raw.arg0 as i32), raw.arg1),
+                }
+            }
+            _ => SyscallDetails::None,
         };
     }
     
@@ -319,10 +350,41 @@ fn decode_wait_options(options: u32) -> Vec<String> {
     decoded
 }
 
+/// Decode prctl options into human-readable strings
+fn decode_prctl_option(option: i32) -> String {
+    match option {
+        1 => "PR_SET_PDEATHSIG".to_string(),
+        2 => "PR_GET_PDEATHSIG".to_string(),
+        3 => "PR_GET_DUMPABLE".to_string(),
+        4 => "PR_SET_DUMPABLE".to_string(),
+        5 => "PR_GET_UNALIGN".to_string(),
+        6 => "PR_SET_UNALIGN".to_string(),
+        8 => "PR_GET_FPEMU".to_string(),
+        9 => "PR_SET_FPEMU".to_string(),
+        10 => "PR_GET_FPEXC".to_string(),
+        11 => "PR_SET_FPEXC".to_string(),
+        12 => "PR_GET_TIMING".to_string(),
+        13 => "PR_SET_TIMING".to_string(),
+        14 => "PR_SET_NAME".to_string(),
+        15 => "PR_GET_NAME".to_string(),
+        19 => "PR_GET_ENDIAN".to_string(),
+        20 => "PR_SET_ENDIAN".to_string(),
+        21 => "PR_GET_SECCOMP".to_string(),
+        22 => "PR_SET_SECCOMP".to_string(),
+        25 => "PR_GET_TSC".to_string(),
+        26 => "PR_SET_TSC".to_string(),
+        27 => "PR_GET_SECUREBITS".to_string(),
+        28 => "PR_SET_SECUREBITS".to_string(),
+        35 => "PR_SET_TIMERSLACK".to_string(),
+        36 => "PR_GET_TIMERSLACK".to_string(),
+        _ => format!("PR_UNKNOWN_{}", option),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trace_common::{PHASE_ENTER, PHASE_EXIT};
+    use trace_common::{PHASE_ENTER, PHASE_EXIT, test_constants::*};
     
     ///NOTE: In these tests, syscall numbers MUST match aarch64 values for proper 
     ///      enum mapping, but other values (PIDs, addresses, etc.) are just for 
@@ -331,11 +393,11 @@ mod tests {
     #[test]
     fn test_enrich_exit_syscall() {
         let raw = RawSyscallEvent {
-            ktime_ns: 1234567890,
-            pid: 1000,
-            tid: 1001,
+            ktime_ns: TEST_TIMESTAMP,
+            pid: TEST_PID,
+            tid: TEST_TID,
             sysno: 93, // exit on aarch64
-            arg0: 42,  // exit status
+            arg0: TEST_EXIT_STATUS as u64,
             arg1: 0,
             arg2: 0,
             phase: PHASE_ENTER,
@@ -348,8 +410,8 @@ mod tests {
         assert_eq!(enriched.syscall_enum, Some(Aarch64Syscalls::Exit));
         
         match enriched.enrichment {
-            SyscallEnrichment::Exit { status, is_group } => {
-                assert_eq!(status, 42);
+            SyscallDetails::Exit { status, is_group } => {
+                assert_eq!(status, TEST_EXIT_STATUS);
                 assert_eq!(is_group, false);
             }
             _ => panic!("Expected Exit enrichment"),
@@ -359,13 +421,13 @@ mod tests {
     #[test]
     fn test_enrich_clone_syscall() {
         let raw = RawSyscallEvent {
-            ktime_ns: 1234567890,
-            pid: 1000,
-            tid: 1001,
+            ktime_ns: TEST_TIMESTAMP,
+            pid: TEST_PID,
+            tid: TEST_TID,
             sysno: 220, // clone on aarch64
-            arg0: 0x00000100 | 0x00000200, // CLONE_VM | CLONE_FS
-            arg1: 0x7fff12340000, // stack pointer
-            arg2: 0x7fff12350000, // parent tid ptr
+            arg0: TEST_CLONE_FLAGS, // CLONE_VM | CLONE_FS
+            arg1: TEST_ADDR_64, // stack pointer
+            arg2: TEST_ADDR_64 + 0x1000, // parent tid ptr
             phase: PHASE_ENTER,
             _pad: [0; 7],
         };
@@ -375,12 +437,12 @@ mod tests {
         assert_eq!(enriched.syscall_name, "clone");
         
         match enriched.enrichment {
-            SyscallEnrichment::Clone { flags, flags_decoded, stack_ptr, parent_tid_ptr, .. } => {
-                assert_eq!(flags, 0x00000100 | 0x00000200);
+            SyscallDetails::Clone { flags, flags_decoded, stack_ptr, parent_tid_ptr, .. } => {
+                assert_eq!(flags, TEST_CLONE_FLAGS);
                 assert!(flags_decoded.contains(&"CLONE_VM".to_string()));
                 assert!(flags_decoded.contains(&"CLONE_FS".to_string()));
-                assert_eq!(stack_ptr, Some(0x7fff12340000));
-                assert_eq!(parent_tid_ptr, Some(0x7fff12350000));
+                assert_eq!(stack_ptr, Some(TEST_ADDR_64));
+                assert_eq!(parent_tid_ptr, Some(TEST_ADDR_64 + 0x1000));
             }
             _ => panic!("Expected Clone enrichment"),
         }
@@ -389,12 +451,12 @@ mod tests {
     #[test]
     fn test_enrich_kill_syscall() {
         let raw = RawSyscallEvent {
-            ktime_ns: 1234567890,
-            pid: 1000,
-            tid: 1001,
+            ktime_ns: TEST_TIMESTAMP,
+            pid: TEST_PID,
+            tid: TEST_TID,
             sysno: 129, // kill on aarch64
-            arg0: 1234,  // target pid
-            arg1: 9,     // SIGKILL
+            arg0: TEST_CHILD_PID as u64,  // target pid
+            arg1: TEST_SIGNAL_KILL as u64,     // SIGKILL
             arg2: 0,
             phase: PHASE_ENTER,
             _pad: [0; 7],
@@ -405,9 +467,9 @@ mod tests {
         assert_eq!(enriched.syscall_name, "kill");
         
         match enriched.enrichment {
-            SyscallEnrichment::Kill { pid, signal, signal_name, is_thread, target_tid } => {
-                assert_eq!(pid, 1234);
-                assert_eq!(signal, 9);
+            SyscallDetails::Kill { pid, signal, signal_name, is_thread, target_tid } => {
+                assert_eq!(pid, TEST_CHILD_PID as i32);
+                assert_eq!(signal, TEST_SIGNAL_KILL);
                 assert_eq!(signal_name, "SIGKILL");
                 assert_eq!(is_thread, false);
                 assert_eq!(target_tid, None);
@@ -419,9 +481,9 @@ mod tests {
     #[test]
     fn test_non_process_syscall_not_enriched() {
         let raw = RawSyscallEvent {
-            ktime_ns: 1234567890,
-            pid: 1000,
-            tid: 1001,
+            ktime_ns: TEST_TIMESTAMP,
+            pid: TEST_PID,
+            tid: TEST_TID,
             sysno: 999, // Unknown syscall
             arg0: 1,
             arg1: 2,
@@ -436,14 +498,14 @@ mod tests {
         assert_eq!(enriched.syscall_enum, None);
         
         match enriched.enrichment {
-            SyscallEnrichment::None => {},
+            SyscallDetails::None => {},
             _ => panic!("Expected no enrichment for unknown syscall"),
         }
     }
 
     #[test]
     fn test_decode_clone_flags() {
-        let flags = decode_clone_flags(0x00000100 | 0x00000200 | 0x00010000);
+        let flags = decode_clone_flags(TEST_CLONE_VM | TEST_CLONE_FS | TEST_CLONE_THREAD);
         assert!(flags.contains(&"CLONE_VM".to_string()));
         assert!(flags.contains(&"CLONE_FS".to_string()));
         assert!(flags.contains(&"CLONE_THREAD".to_string()));
@@ -452,9 +514,97 @@ mod tests {
 
     #[test]
     fn test_signal_names() {
-        assert_eq!(signal_name(9), "SIGKILL");
-        assert_eq!(signal_name(15), "SIGTERM");
-        assert_eq!(signal_name(2), "SIGINT");
+        assert_eq!(signal_name(TEST_SIGNAL_KILL), "SIGKILL");
+        assert_eq!(signal_name(TEST_SIGNAL_TERM), "SIGTERM");
+        assert_eq!(signal_name(TEST_SIGNAL_INT), "SIGINT");
         assert_eq!(signal_name(999), "SIG999");
+    }
+
+    #[test]
+    fn test_enrich_prctl_syscall() {
+        let raw = RawSyscallEvent {
+            ktime_ns: TEST_TIMESTAMP,
+            pid: TEST_PID,
+            tid: TEST_TID,
+            sysno: 167, // prctl on aarch64
+            arg0: TEST_PRCTL_GET_NAME as u64, // PR_GET_NAME
+            arg1: TEST_ADDR_64, // name buffer
+            arg2: 0,
+            phase: PHASE_ENTER,
+            _pad: [0; 7],
+        };
+
+        let enriched = enrich_syscall(raw);
+        
+        assert_eq!(enriched.syscall_name, "prctl");
+        assert_eq!(enriched.syscall_enum, Some(Aarch64Syscalls::Prctl));
+        
+        match enriched.enrichment {
+            SyscallDetails::ProcessInfo { result, info_type } => {
+                assert_eq!(result, TEST_ADDR_32);
+                assert!(info_type.contains("PR_GET_NAME"));
+            }
+            _ => panic!("Expected ProcessInfo enrichment"),
+        }
+    }
+
+    #[test]
+    fn test_enrich_setpgid_syscall() {
+        let raw = RawSyscallEvent {
+            ktime_ns: TEST_TIMESTAMP,
+            pid: TEST_PID,
+            tid: TEST_TID,
+            sysno: 154, // setpgid on aarch64
+            arg0: TEST_PID as u64, // pid
+            arg1: TEST_PGID as u64, // pgid
+            arg2: 0,
+            phase: PHASE_ENTER,
+            _pad: [0; 7],
+        };
+
+        let enriched = enrich_syscall(raw);
+        
+        assert_eq!(enriched.syscall_name, "setpgid");
+        assert_eq!(enriched.syscall_enum, Some(Aarch64Syscalls::SetPgid));
+        
+        match enriched.enrichment {
+            SyscallDetails::ProcessInfo { result, info_type } => {
+                assert_eq!(result, TEST_PGID);
+                assert_eq!(info_type, format!("setpgid(pid={}, pgid={})", TEST_PID, TEST_PGID));
+            }
+            _ => panic!("Expected ProcessInfo enrichment"),
+        }
+    }
+
+    #[test]
+    fn test_decode_prctl_option() {
+        assert_eq!(decode_prctl_option(TEST_PRCTL_GET_NAME), "PR_GET_NAME");
+        assert_eq!(decode_prctl_option(TEST_PRCTL_SET_NAME), "PR_SET_NAME");
+        assert_eq!(decode_prctl_option(TEST_PRCTL_SET_SECCOMP), "PR_SET_SECCOMP");
+        assert_eq!(decode_prctl_option(999), "PR_UNKNOWN_999");
+    }
+
+    #[test]
+    fn test_file_io_syscall_not_enriched() {
+        // File I/O syscalls should not be enriched (not process-related)
+        let raw = RawSyscallEvent {
+            ktime_ns: TEST_TIMESTAMP,
+            pid: TEST_PID,
+            tid: TEST_TID,
+            sysno: 63, // read on aarch64 (not process-related)
+            arg0: TEST_FD as u64,
+            arg1: TEST_BUFFER_PTR,
+            arg2: TEST_SIZE_1K,
+            phase: PHASE_ENTER,
+            _pad: [0; 7],
+        };
+
+        let enriched = enrich_syscall(raw);
+        
+        // Should not be enriched since it's not process-related
+        match enriched.enrichment {
+            SyscallDetails::None => {},
+            _ => panic!("Expected no enrichment for non-process-related syscall"),
+        }
     }
 }

@@ -5,7 +5,7 @@ use trace::{
     attach_tracepoints, connect_ebpf_bridge, connect_events_ringbuf, enrich_syscall, execute_cmd_and_seed_cmd_pid,
     remove_locked_mem_limit, setup_ebpf, verify_child_tracked,
 };
-use trace_common::{EnrichedSyscall, RawSyscallEvent, SyscallEnrichment};
+use trace_common::{EnrichedSyscall, RawSyscallEvent, SyscallDetails};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -81,14 +81,14 @@ async fn read_events_async(
                     enriched.phase_name(),
                     enriched.raw.arg0,
                     match enriched.enrichment {
-                        SyscallEnrichment::None => "None".to_string(),
-                        SyscallEnrichment::Exit { status, is_group } => 
+                        SyscallDetails::None => "None".to_string(),
+                        SyscallDetails::Exit { status, is_group } => 
                             format!("Exit(status={}, group={})", status, is_group),
-                        SyscallEnrichment::Clone { flags_decoded, .. } => 
+                        SyscallDetails::Clone { flags_decoded, .. } => 
                             format!("Clone(flags={:?})", flags_decoded),
-                        SyscallEnrichment::Kill { signal_name, is_thread, .. } => 
+                        SyscallDetails::Kill { signal_name, is_thread, .. } => 
                             format!("Kill(signal={}, thread={})", signal_name, is_thread),
-                        SyscallEnrichment::ProcessInfo { info_type, result } => 
+                        SyscallDetails::ProcessInfo { info_type, result } => 
                             format!("Info({}={})", info_type, result),
                         _ => "Other".to_string(),
                     },

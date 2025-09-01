@@ -40,7 +40,7 @@ pub struct RawSyscallEvent {
 
 #[cfg(feature = "user")]
 #[derive(Debug, Clone, Default)]
-pub enum SyscallEnrichment {
+pub enum SyscallDetails {
     #[default]
     None,
     Exec {
@@ -78,7 +78,7 @@ pub enum SyscallEnrichment {
         pid: i32,
         signal: i32,
         signal_name: String,
-        is_thread: bool, // true for tkill/tgkill, false for kill
+        is_thread: bool,         // true for tkill/tgkill, false for kill
         target_tid: Option<i32>, // for tgkill
     },
     ProcessInfo {
@@ -116,7 +116,7 @@ pub struct EnrichedSyscall {
     pub syscall_enum: Option<Aarch64Syscalls>,
 
     // Enriched data (populated in userspace)
-    pub enrichment: SyscallEnrichment,
+    pub enrichment: SyscallDetails,
 }
 
 #[cfg(feature = "user")]
@@ -132,7 +132,7 @@ impl EnrichedSyscall {
             raw,
             syscall_name,
             syscall_enum,
-            enrichment: SyscallEnrichment::None,
+            enrichment: SyscallDetails::None,
         }
     }
 
@@ -159,6 +159,56 @@ pub const PHASE_ENTER: u8 = 0;
 pub const PHASE_EXIT: u8 = 1;
 pub const PHASE_TASK_EXIT: u8 = 2;
 
+// Test constants - safe values that won't cause overflow issues
+#[cfg(feature = "user")]
+pub mod test_constants {
+    /// Test memory address that fits in u32
+    pub const TEST_ADDR_32: u32 = 0x12340000;
+    /// Test memory address as u64
+    pub const TEST_ADDR_64: u64 = 0x12340000;
+    /// Test buffer pointer
+    pub const TEST_BUFFER_PTR: u64 = 0x1000;
+    /// Test PID values
+    pub const TEST_PID: u32 = 1000;
+    pub const TEST_TID: u32 = 1001;
+    pub const TEST_CHILD_PID: u32 = 1234;
+    pub const TEST_PARENT_PID: u32 = 999;
+    /// Test timestamp
+    pub const TEST_TIMESTAMP: u64 = 1234567890;
+    /// Test file descriptor
+    pub const TEST_FD: i32 = 3;
+    /// Test size values
+    pub const TEST_SIZE_4K: u64 = 4096;
+    pub const TEST_SIZE_1K: u64 = 1024;
+    /// Test exit status
+    pub const TEST_EXIT_STATUS: i32 = 42;
+    /// Test signal numbers
+    pub const TEST_SIGNAL_KILL: i32 = 9;
+    pub const TEST_SIGNAL_TERM: i32 = 15;
+    pub const TEST_SIGNAL_INT: i32 = 2;
+    /// Clone flags
+    pub const TEST_CLONE_VM: u64 = 0x00000100;
+    pub const TEST_CLONE_FS: u64 = 0x00000200;
+    pub const TEST_CLONE_THREAD: u64 = 0x00010000;
+    pub const TEST_CLONE_FLAGS: u64 = TEST_CLONE_VM | TEST_CLONE_FS;
+    /// Memory protection flags
+    pub const TEST_PROT_READ: i32 = 0x1;
+    pub const TEST_PROT_WRITE: i32 = 0x2;
+    pub const TEST_PROT_EXEC: i32 = 0x4;
+    pub const TEST_PROT_RW: i32 = TEST_PROT_READ | TEST_PROT_WRITE;
+    pub const TEST_PROT_RWX: i32 = TEST_PROT_READ | TEST_PROT_WRITE | TEST_PROT_EXEC;
+    /// Prctl options
+    pub const TEST_PRCTL_GET_NAME: i32 = 15;
+    pub const TEST_PRCTL_SET_NAME: i32 = 14;
+    pub const TEST_PRCTL_SET_SECCOMP: i32 = 22;
+    /// Process group IDs
+    pub const TEST_PGID: u32 = 2000;
+    /// Special file descriptor values
+    pub const TEST_AT_FDCWD: i32 = -100;
+    /// File flags
+    pub const TEST_O_FLAGS: i32 = 0x241; // O_WRONLY | O_CREAT | O_TRUNC
+}
+
 /// ProcEvent is a process related event.
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -177,3 +227,5 @@ pub struct ProcEvent {
 /// scope modes (shared so userspace and kernelspace agree)
 pub const MODE_ALL: u32 = 0;
 pub const MODE_CGROUP: u32 = 0;
+
+

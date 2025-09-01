@@ -25,17 +25,21 @@ pub use aarch64_syscalls::Aarch64Syscalls;
 /// TODO: expand to support more arguments.
 /// phase is 0 = enter, 1 = exit
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct RawSyscallEvent {
+#[derive(Clone, Copy)]
+pub struct RawSysEventV1 {
     pub ktime_ns: u64,
-    pub pid: u32,
+    pub pid: u32, // tgid
     pub tid: u32,
-    pub sysno: i32,
-    pub arg0: u64, // raw pointer
-    pub arg1: u64, // raw pointer
-    pub arg2: u64, // raw pointer
+    pub ppid: u32, // optional (0 if unknown)
+    pub arch: u16, // AUDIT_ARCH_* or 0 (userspace can stamp once/session)
     pub phase: u8, // 0=enter, 1=exit
-    pub _pad: [u8; 7],
+    pub sysno: i32,
+    pub ret: i64,       // valid on exit; undefined on enter
+    pub args: [u64; 6], // always present; unused tail = 0
+    pub comm: [u8; 16], // TASK_COMM_LEN
+    pub aux_len: u16,   // bytes used in aux[]
+    pub aux_kind: u16,  // 0=None, 1=Path, 5=Argv0, 4=Name, 3=CloneArgsHdr, ...
+    pub aux: [u8; 112], // bounded snapshot of pointed data (enter only)
 }
 
 #[cfg(feature = "user")]
@@ -227,5 +231,3 @@ pub struct ProcEvent {
 /// scope modes (shared so userspace and kernelspace agree)
 pub const MODE_ALL: u32 = 0;
 pub const MODE_CGROUP: u32 = 0;
-
-

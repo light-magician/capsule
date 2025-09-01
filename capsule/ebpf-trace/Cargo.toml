@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "trace",
+    "trace-userspace",
     "trace-common",
     "trace-ebpf",
 ]

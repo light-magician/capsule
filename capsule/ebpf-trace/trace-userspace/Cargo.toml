@@ -1,5 +1,5 @@
 [package]
-name = "trace"
+name = "trace-userspace"
 version = "0.1.0"
 edition = "2021"
 

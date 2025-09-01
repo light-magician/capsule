@@ -1,7 +1,7 @@
 use anyhow::Result;
 use aya::maps::RingBuf;
 use tokio::io::unix::AsyncFd;
-use trace::{
+use trace_userspace::{
     attach_tracepoints, connect_ebpf_bridge, connect_events_ringbuf, enrich_syscall, execute_cmd_and_seed_cmd_pid,
     remove_locked_mem_limit, setup_ebpf, verify_child_tracked,
 };

@@ -44,6 +44,8 @@ lscpu | grep Architecture
 
 # Check what the container is running on
 cat /proc/cpuinfo | grep -E "(processor|model name|architecture)"
+# view the way the syscalls are defined per that arch
+cat /usr/include/asm-generic/unistd.h
 ```
 
 ```bash

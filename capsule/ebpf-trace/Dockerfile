@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     libelf-dev zlib1g-dev libssl-dev openssl \
     bpfcc-tools \
     linux-headers-generic \
+    man-db manpages manpages-dev less \
   && rm -rf /var/lib/apt/lists/*
 
 # Rust (stable + nightly for eBPF targets)

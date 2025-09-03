@@ -6,9 +6,8 @@ services:
       dockerfile: integration/Dockerfile
     tty: true # keeps stdin open for exec
     volumes:
-      - ../capsule-runtime:/capsule/capsule-runtime
-      - ../capsule-agents:/capsule/capsule-agents
-      - ../capsule-runtime-v2:/capsule/capsule-runtime-v2
+      - ../agents:/capsule/agents
+      - ../capsule:/capsule/capsule
 #     depends_on:
 #       supabase-db:
 #         condition: service_healthy

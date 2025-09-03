@@ -24,17 +24,16 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
 RUN npm install -g @anthropic-ai/claude-code
 
 WORKDIR /capsule
-COPY capsule-runtime/ ./capsule-runtime
-COPY capsule-agents/  ./capsule-agents
-COPY capsule-runtime-v2/ ./capsule-runtime-v2
+COPY agents/  ./agents
+COPY capsule/ ./capsule
 # ----------- INSTALL CAPSULE GLOBALLY --------------------
 # Build and install capsule globally
-RUN cd capsule-runtime && \
-    cargo install --path . --force
+RUN cd capsule && \
+    cargo install --path cli/ --force
 
 # ----------- SET UP AGENT ENVS ----------------------------
 # Set up a Python virtual environment in capsule-agents base
-RUN cd capsule-agents/catalog/base && \
+RUN cd agents/catalog/base && \
     python3 -m venv .venv && \
     .venv/bin/pip install --upgrade pip 
 

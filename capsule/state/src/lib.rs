@@ -679,7 +679,18 @@ impl ProcessTracker {
     async fn handle_exec(&self, state: &mut AgentState, event: &ProcessEvent) -> Result<()> {
         let name = LiveProcess::generate_name(&event.command_line, state.capsule_target.as_deref());
 
-        if let Some(existing_process) = state.processes.get_mut(&event.pid) {
+        // Resolve missing PID for leader lines (pid==0 from parser when no [pid] prefix)
+        let resolved_pid = if event.pid == 0 {
+            if let Some(pid) = self.resolve_leader_pid_from_proc(state, &event.command_line).await.ok().flatten() {
+                pid
+            } else {
+                0
+            }
+        } else {
+            event.pid
+        };
+
+        if let Some(existing_process) = state.processes.get_mut(&resolved_pid) {
             // Update existing process (from clone/fork) with real command line
             // Keep the existing PPID from clone/fork event
             existing_process.name = name;
@@ -688,7 +699,7 @@ impl ProcessTracker {
 
             debug_log!(
                 "DEBUG: Exec updated existing process {} with PPID {} -> {:?}",
-                event.pid,
+                resolved_pid,
                 existing_process.ppid,
                 event
                     .command_line
@@ -699,12 +710,12 @@ impl ProcessTracker {
             // New process we haven't seen before (direct execve)
             // Try to resolve PPID from /proc filesystem if available
             let resolved_ppid = self
-                .resolve_ppid_from_proc(event.pid)
+                .resolve_ppid_from_proc(resolved_pid)
                 .await
                 .unwrap_or(event.ppid);
 
             let process = LiveProcess {
-                pid: event.pid,
+                pid: resolved_pid,
                 ppid: resolved_ppid,
                 name,
                 command_line: event.command_line.clone(),
@@ -715,7 +726,7 @@ impl ProcessTracker {
 
             debug_log!(
                 "DEBUG: Exec created new process {} with resolved PPID {} -> {:?}",
-                event.pid,
+                resolved_pid,
                 resolved_ppid,
                 event
                     .command_line
@@ -723,8 +734,12 @@ impl ProcessTracker {
                     .unwrap_or(&"<no command>".to_string())
             );
 
-            state.processes.insert(event.pid, process);
-            state.active_pids.insert(event.pid);
+            if resolved_pid != 0 {
+                state.processes.insert(resolved_pid, process);
+                state.active_pids.insert(resolved_pid);
+            } else {
+                debug_log!("DEBUG: Exec event had unknown PID; deferring process creation until a PID can be resolved");
+            }
         }
 
         Ok(())
@@ -854,6 +869,70 @@ impl ProcessTracker {
                 Err(anyhow::anyhow!("Could not read /proc/{}/stat: {}", pid, e))
             }
         }
+    }
+
+    /// Attempt to resolve the leader PID for an exec event that arrived without a PID in strace output.
+    /// Heuristic: scan /proc for processes whose argv[0] (or basename) matches the exec command.
+    async fn resolve_leader_pid_from_proc(&self, state: &AgentState, command_line: &[String]) -> Result<Option<u32>> {
+        // Determine candidate executable/basename
+        let exec_candidate = command_line
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        if exec_candidate.is_empty() {
+            return Ok(None);
+        }
+
+        let exec_basename = exec_candidate
+            .rsplit('/')
+            .next()
+            .unwrap_or(exec_candidate);
+
+        let mut matches: Vec<u32> = Vec::new();
+
+        let mut dir = match tokio::fs::read_dir("/proc").await {
+            Ok(d) => d,
+            Err(_) => return Ok(None),
+        };
+
+        while let Ok(Some(entry)) = dir.next_entry().await {
+            let file_name = entry.file_name();
+            let pid_str = match file_name.to_str() {
+                Some(s) => s,
+                None => continue,
+            };
+            if let Ok(pid) = pid_str.parse::<u32>() {
+                // Skip PIDs already tracked
+                if state.processes.contains_key(&pid) {
+                    continue;
+                }
+
+                // Read cmdline
+                let cmdline_path = format!("/proc/{}/cmdline", pid);
+                if let Ok(bytes) = tokio::fs::read(&cmdline_path).await {
+                    // cmdline is NUL-separated
+                    let parts: Vec<&[u8]> = bytes.split(|b| *b == 0).filter(|p| !p.is_empty()).collect();
+                    if let Some(first) = parts.first() {
+                        let first_str = match std::str::from_utf8(first) {
+                            Ok(s) => s,
+                            Err(_) => continue,
+                        };
+                        let first_basename = first_str.rsplit('/').next().unwrap_or(first_str);
+
+                        if first_str == exec_candidate || first_basename == exec_basename {
+                            matches.push(pid);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Prefer the highest PID (most recently created)
+        let resolved = matches.into_iter().max();
+        if let Some(pid) = resolved {
+            debug_log!("DEBUG: Resolved leader PID {} for exec candidate {}", pid, exec_basename);
+        }
+        Ok(resolved)
     }
 
     // SYSCALL PARSING METHODS - moved from pipeline layer

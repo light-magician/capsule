@@ -10,13 +10,11 @@ use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
 // STRACE-SPECIFIC PATTERNS
-// TODO: These patterns are specific to strace output format and will need adaptation
-// for other tracers (eBPF, dtrace, perf). For universal process exit detection:
-// - strace: Uses exit() syscall + "+++ exited with N +++" annotation
-// - eBPF: Uses sched_process_exit tracepoint (fired during kernel cleanup)
-// - eBPF (complete): Uses sched_process_free tracepoint (fully terminated)
-static STRACE_EXIT_STATUS_PATTERN: &str = r"^\[pid\s+(?P<pid>\d+)\]\s+(?P<timestamp>\d+:\d+:\d+\.\d+)\s+\+\+\+\s+exited\s+with\s+(?P<exit_code>\d+)\s+\+\+\+";
-static STRACE_SYSCALL_PATTERN: &str = r"^\[pid\s+(?P<pid>\d+)\]\s+(?P<timestamp>\d+:\d+:\d+\.\d+)\s+(?P<syscall>\w+)\((?P<args>.*?)(?:\)|<unfinished)(?:\s*=\s*(?P<result>[^<\n]+))?.*";
+// These patterns support an optional "[pid N]" prefix because strace may omit it
+// for the thread-group leader when starting a fresh trace (not attaching).
+// For lines without a PID, we emit events with pid=0; downstream resolves leader PID on exec.
+static STRACE_EXIT_STATUS_PATTERN: &str = r"^(?:\[pid\s+(?P<pid>\d+)\]\s+)?(?P<timestamp>\d+:\d+:\d+\.\d+)\s+\+\+\+\s+exited\s+with\s+(?P<exit_code>\d+)\s+\+\+\+";
+static STRACE_SYSCALL_PATTERN: &str = r"^(?:\[pid\s+(?P<pid>\d+)\]\s+)?(?P<timestamp>\d+:\d+:\d+\.\d+)\s+(?P<syscall>\w+)\((?P<args>.*?)(?:\)|<unfinished)(?:\s*=\s*(?P<result>[^<\n]+))?.*";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StraceParseResult {
@@ -48,6 +46,7 @@ impl StraceParser {
         });
 
         if let Some(captures) = exit_regex.captures(clean_line) {
+            // PID may be missing for leader lines; use 0 as sentinel
             let pid = captures
                 .name("pid")
                 .and_then(|m| m.as_str().parse::<u32>().ok())
@@ -80,6 +79,7 @@ impl StraceParser {
         });
 
         if let Some(captures) = regex.captures(clean_line) {
+            // PID may be absent for leader lines; we set 0 and handle later on exec
             let pid = captures
                 .name("pid")
                 .and_then(|m| m.as_str().parse::<u32>().ok())

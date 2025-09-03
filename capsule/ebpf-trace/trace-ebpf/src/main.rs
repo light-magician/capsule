@@ -2,7 +2,9 @@
 #![no_main]
 
 use aya_ebpf::{
-    helpers::{bpf_get_current_pid_tgid, bpf_ktime_get_ns, bpf_probe_read_kernel},
+    helpers::{
+        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_ktime_get_ns, bpf_probe_read_kernel,
+    },
     macros::{map, raw_tracepoint, tracepoint},
     maps::{ring_buf::RingBuf, HashMap},
     programs::{RawTracePointContext, TracePointContext},
@@ -160,19 +162,31 @@ unsafe fn submit_event_enter(sysno: u32, a0: u64, a1: u64, a2: u64) {
     }
 
     if let Some(mut slot) = EVENTS.reserve::<RawSyscallEvent>(0) {
+        let comm_buf = bpf_get_current_comm().unwrap_or([0u8; 16]);
+
         let ev = RawSyscallEvent {
+            // meta
             ktime_ns: bpf_ktime_get_ns(),
             pid:      tgid,
             tid:      pid_tid as u32,
             sysno:    sysno as i32,
-            arg0:     a0,
-            arg1:     a1, 
-            arg2:     a2,
-            phase:    0,  // PHASE_ENTER
-            _pad:     [0; 7],
+            phase:    0,  // enter
+            _pad0:    [0; 3],
+
+            // args + ret
+            ret: 0,
+            args: [a0, a1, a2, 0, 0, 0],
+
+            // comm
+            comm: comm_buf,
+
+            // aux
+            aux_len: 0,
+            aux_kind: 0,
+            aux: [0; 112],
         };
-        slot.write(ev); // fills the memory
-        slot.submit(0); // submits it so that userspace can read
+        slot.write(ev);
+        slot.submit(0);
     }
 }
 
@@ -193,19 +207,30 @@ unsafe fn submit_event_exit(sysno: u32, ret: u64) {
     }
 
     if let Some(mut slot) = EVENTS.reserve::<RawSyscallEvent>(0) {
-        // For exits, store return value in arg0; arg1/arg2 = 0
+        let comm_buf = bpf_get_current_comm().unwrap_or([0u8; 16]);
+
         let ev = RawSyscallEvent {
+            // meta
             ktime_ns: bpf_ktime_get_ns(),
             pid:      tgid,
             tid:      pid_tid as u32,
             sysno:    sysno as i32,
-            arg0:     ret,
-            arg1:     0,
-            arg2:     0,
-            phase:    1,  // PHASE_EXIT
-            _pad:     [0; 7],
+            phase:    1,  // exit
+            _pad0:    [0; 3],
+
+            // args + ret (no args on exit path)
+            ret: ret as i64,
+            args: [0, 0, 0, 0, 0, 0],
+
+            // comm
+            comm: comm_buf,
+
+            // aux
+            aux_len: 0,
+            aux_kind: 0,
+            aux: [0; 112],
         };
-        slot.write(ev);           
+        slot.write(ev);
         slot.submit(0);
     }
 }

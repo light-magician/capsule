@@ -1,9 +1,14 @@
 #![no_std]
 
+pub mod syscalls;
+
 #[cfg(feature = "user")]
 extern crate alloc;
 #[cfg(feature = "user")]
 use alloc::{string::String, vec::Vec};
+
+#[cfg(feature = "user")]
+pub use syscalls::{arch::Arch, resolve_sys, Sys};
 
 /// This is a syscall event.
 ///
@@ -17,15 +22,25 @@ use alloc::{string::String, vec::Vec};
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct RawSyscallEvent {
+    // core metadata
     pub ktime_ns: u64,
-    pub pid: u32,
+    pub pid: u32, // tgid
     pub tid: u32,
     pub sysno: i32,
-    pub arg0: u64, // raw pointer
-    pub arg1: u64, // raw pointer
-    pub arg2: u64, // raw pointer
     pub phase: u8, // 0=enter, 1=exit
-    pub _pad: [u8; 7],
+    pub _pad0: [u8; 3],
+
+    // arguments and return value
+    pub ret: i64,        // valid on exit; 0 on enter
+    pub args: [u64; 6],  // raw arg values; unused tail = 0
+
+    // task comm snapshot
+    pub comm: [u8; 16],  // TASK_COMM_LEN
+
+    // auxiliary payload (TLV; empty for now)
+    pub aux_len: u16,    // bytes used in aux[]
+    pub aux_kind: u16,   // 0=None (reserved for future use)
+    pub aux: [u8; 112],  // bounded snapshot of pointed data (enter only)
 }
 
 #[cfg(feature = "user")]

@@ -6,8 +6,8 @@ use aya::{
     programs::{RawTracePoint, TracePoint},
     Ebpf,
 };
-use trace_common::RawSyscallEvent;
 use log::{debug, warn};
+use trace_common::RawSyscallEvent;
 
 pub fn remove_locked_mem_limit() -> Result<()> {
     // rlimit bump

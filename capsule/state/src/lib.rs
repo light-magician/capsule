@@ -109,18 +109,21 @@ impl LiveProcess {
 
         // Extract executable name
         if let Some(executable) = command_line.first() {
-            let binary_name = executable.split('/').last().unwrap_or(executable);
+            // Trim quotes in case argv[0] came quoted from fallback parsing
+            let cleaned_exec = executable.trim_matches('"');
+            let binary_name = cleaned_exec.split('/').last().unwrap_or(cleaned_exec);
 
             // For interpreters, try to get script name
             match binary_name {
                 "python" | "python3" | "node" | "ruby" => {
                     if command_line.len() > 1 {
-                        let script = &command_line[1];
+                        let script = command_line[1].trim_matches('"');
                         if let Some(script_name) = script.split('/').last() {
                             return script_name
                                 .trim_end_matches(".py")
                                 .trim_end_matches(".js")
                                 .trim_end_matches(".rb")
+                                .trim_matches('"')
                                 .to_string();
                         }
                     }
@@ -977,10 +980,15 @@ impl ProcessTracker {
                 
                 // Don't forget the last argument
                 if !current_arg.trim().is_empty() {
-                    command_line.push(current_arg.trim().to_string());
+                    command_line.push(Self::sanitize_cmd_arg(current_arg.trim()));
                 }
                 
                 if !command_line.is_empty() {
+                    // Sanitize any residual quotes/escapes in collected args
+                    let command_line: Vec<String> = command_line
+                        .into_iter()
+                        .map(|s| Self::sanitize_cmd_arg(&s))
+                        .collect();
                     return Some(command_line);
                 }
             }
@@ -988,7 +996,7 @@ impl ProcessTracker {
         
         // Fallback: return the first argument as the command
         if !args.is_empty() {
-            Some(vec![args[0].clone()])
+            Some(vec![Self::sanitize_cmd_arg(args[0].as_str())])
         } else {
             None
         }
@@ -1007,6 +1015,16 @@ impl ProcessTracker {
     /// Parse vfork syscall result to extract child PID
     fn parse_vfork_result(&self, result: Option<&str>) -> Option<u32> {
         result?.trim().parse::<u32>().ok()
+    }
+
+    /// Remove surrounding quotes and unescape common escaped quotes
+    fn sanitize_cmd_arg<S: AsRef<str>>(s: S) -> String {
+        let mut out = s.as_ref().trim().to_string();
+        if out.len() >= 2 && out.starts_with('"') && out.ends_with('"') {
+            out = out[1..out.len()-1].to_string();
+        }
+        out = out.replace("\\\"", "\"").replace("\\\\", "\\");
+        out
     }
 
     /// Parse wait4 syscall to extract child PID and exit status

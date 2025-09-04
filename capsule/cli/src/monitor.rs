@@ -2,6 +2,7 @@
 //!
 //! Shows real-time process list with keyboard navigation
 
+use crate::ipc::StateClient;
 use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
@@ -10,16 +11,15 @@ use crossterm::{
 };
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     style::{Color, Modifier, Style},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 use state::{AgentState, LiveProcess};
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use std::time::{Duration, Instant};
-use crate::ipc::StateClient;
+use tokio::sync::RwLock;
 
 /// TUI application state
 struct MonitorApp {
@@ -64,23 +64,23 @@ impl MonitorApp {
             KeyCode::PageUp => {
                 self.auto_scroll = false;
                 self.syscall_scroll = self.syscall_scroll.saturating_sub(10);
-            },
+            }
             KeyCode::PageDown => {
                 self.auto_scroll = false;
                 self.syscall_scroll = self.syscall_scroll.saturating_add(10);
-            },
+            }
             KeyCode::Home => {
                 self.auto_scroll = false;
                 self.syscall_scroll = 0;
-            },
+            }
             KeyCode::End => {
                 self.auto_scroll = true; // Re-enable auto-scroll when going to end
                 self.syscall_scroll = 0; // Will be set to max in draw()
-            },
+            }
             KeyCode::Char(' ') => {
                 // Toggle auto-scroll
                 self.auto_scroll = !self.auto_scroll;
-            },
+            }
             KeyCode::Char('r') => self.force_refresh(),
             _ => {}
         }
@@ -106,10 +106,10 @@ impl MonitorApp {
     fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
 
-        // Split into two columns: 33% processes, 67% syscalls
+        // Split into two columns: 40% processes, 60% syscalls (wider to fit columns)
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(33), Constraint::Percentage(67)])
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
             .split(area);
 
         // Read current state (non-blocking)
@@ -118,7 +118,8 @@ impl MonitorApp {
                 let sorted_processes = state.processes_by_state();
                 let count = sorted_processes.len();
                 let process_items = create_process_state_items(&sorted_processes);
-                let syscall_lines: Vec<String> = state.recent_syscalls().into_iter().cloned().collect();
+                let syscall_lines: Vec<String> =
+                    state.recent_syscalls().into_iter().cloned().collect();
                 (process_items, count, syscall_lines)
             }
             Err(_) => {
@@ -141,7 +142,7 @@ impl MonitorApp {
             // Calculate scroll position
             let available_height = chunks[1].height.saturating_sub(2) as usize; // Subtract border
             let total_lines = syscalls.len();
-            
+
             let scroll_pos = if self.auto_scroll {
                 // Auto-scroll: show most recent lines
                 if total_lines > available_height {
@@ -154,7 +155,7 @@ impl MonitorApp {
                 let max_scroll = total_lines.saturating_sub(available_height);
                 std::cmp::min(self.syscall_scroll as usize, max_scroll)
             };
-            
+
             // Extract visible lines
             let end_idx = std::cmp::min(scroll_pos + available_height, total_lines);
             let visible_lines = if scroll_pos < total_lines {
@@ -162,7 +163,7 @@ impl MonitorApp {
             } else {
                 &[]
             };
-            
+
             (visible_lines.join("\n"), scroll_pos as u16)
         };
 
@@ -178,7 +179,11 @@ impl MonitorApp {
         };
 
         let syscall_widget = Paragraph::new(syscall_text)
-            .block(Block::default().title(scroll_indicator).borders(Borders::ALL))
+            .block(
+                Block::default()
+                    .title(scroll_indicator)
+                    .borders(Borders::ALL),
+            )
             .wrap(Wrap { trim: true })
             .scroll((0, 0)); // Scroll is handled manually above
 
@@ -191,12 +196,9 @@ impl MonitorApp {
             width: chunks[0].width - 2,
             height: 1,
         };
-        
+
         let help_text = "↑/↓ list, PgUp/PgDn scroll, SPACE auto, 'q' quit";
-        frame.render_widget(
-            Paragraph::new(help_text),
-            help_area,
-        );
+        frame.render_widget(Paragraph::new(help_text), help_area);
     }
 
     /// Format process runtime
@@ -221,7 +223,7 @@ fn create_process_list_items(processes: &[&LiveProcess]) -> Vec<ListItem<'static
         return vec![
             ListItem::new("  PID   PPID  NAME         COMMAND"),
             ListItem::new("  ---   ----  ----         -------"),
-            ListItem::new("  No active processes")
+            ListItem::new("  No active processes"),
         ];
     }
 
@@ -236,7 +238,7 @@ fn create_process_list_items(processes: &[&LiveProcess]) -> Vec<ListItem<'static
         } else {
             process.command_line.first().cloned().unwrap_or_default()
         };
-        
+
         // Truncate long commands
         let command = if command.len() > 40 {
             format!("{}...", &command[..37])
@@ -246,10 +248,7 @@ fn create_process_list_items(processes: &[&LiveProcess]) -> Vec<ListItem<'static
 
         let line = format!(
             "{:>5} {:>5} {:12} {}",
-            process.pid,
-            process.ppid,
-            process.name,
-            command
+            process.pid, process.ppid, process.name, command
         );
 
         items.push(ListItem::new(line));
@@ -262,28 +261,28 @@ fn create_process_list_items(processes: &[&LiveProcess]) -> Vec<ListItem<'static
 fn create_process_state_items(processes: &[&state::LiveProcess]) -> Vec<ListItem<'static>> {
     if processes.is_empty() {
         return vec![
-            ListItem::new("  PID   PPID  STATE     NAME"),
-            ListItem::new("  ---   ----  --------  ----"),
-            ListItem::new("  No processes")
+            ListItem::new("NAME              S  PID   PPID"),
+            ListItem::new("----------------  -  ----- -----"),
+            ListItem::new("No processes"),
         ];
     }
 
     let mut items = vec![
-        ListItem::new("  PID   PPID  STATE     NAME"),
-        ListItem::new("  ---   ----  --------  ----"),
+        ListItem::new("NAME              S  PID   PPID"),
+        ListItem::new("----------------  -  ----- -----"),
     ];
 
     for process in processes {
         // Format state to match ProcessState enum exactly with requested colors
-        let (state_str, state_color) = match process.state {
-            state::ProcessState::Spawning => ("Spawning", Color::Yellow),     // Spawning (yellow)
-            state::ProcessState::Active => ("Active  ", Color::Green),        // Active (green) 
-            state::ProcessState::Waiting => ("Waiting ", Color::Rgb(255, 165, 0)), // Waiting (orange)
-            state::ProcessState::Exiting => ("Exiting ", Color::Red),         // Exiting (red)
-            state::ProcessState::Exited => ("Exited  ", Color::Rgb(128, 128, 128)), // Exited (lower contrast grey)
+        let (state_code, state_color) = match process.state {
+            state::ProcessState::Spawning => ('S', Color::Yellow), // Spawning (yellow)
+            state::ProcessState::Active => ('A', Color::Green),    // Active (green)
+            state::ProcessState::Waiting => ('W', Color::Rgb(255, 165, 0)), // Waiting (orange)
+            state::ProcessState::Exiting => ('X', Color::Red),     // Exiting (red)
+            state::ProcessState::Exited => ('E', Color::Rgb(128, 128, 128)), // Exited (grey)
         };
 
-        // Use process name, truncate if needed
+        // Use process name, truncate/pad to fixed width for alignment
         let name = if process.name.len() > 16 {
             format!("{}...", &process.name[..13])
         } else {
@@ -291,11 +290,8 @@ fn create_process_state_items(processes: &[&state::LiveProcess]) -> Vec<ListItem
         };
 
         let line_text = format!(
-            "{:>5} {:>5}  {:8}  {}",
-            process.pid,
-            process.ppid,
-            state_str,
-            name
+            "{:17} {:1} {:>5} {:>5}",
+            name, state_code, process.pid, process.ppid
         );
 
         // Create ListItem with colored state
@@ -333,7 +329,7 @@ pub async fn run_monitor(agent_state: Arc<RwLock<AgentState>>) -> Result<()> {
 pub async fn run_monitor_live(socket_path: &Path) -> Result<()> {
     // Connect to state server
     let mut state_client = StateClient::connect(socket_path).await?;
-    
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -391,23 +387,23 @@ impl LiveMonitorApp {
             KeyCode::PageUp => {
                 self.auto_scroll = false;
                 self.syscall_scroll = self.syscall_scroll.saturating_sub(10);
-            },
+            }
             KeyCode::PageDown => {
                 self.auto_scroll = false;
                 self.syscall_scroll = self.syscall_scroll.saturating_add(10);
-            },
+            }
             KeyCode::Home => {
                 self.auto_scroll = false;
                 self.syscall_scroll = 0;
-            },
+            }
             KeyCode::End => {
                 self.auto_scroll = true; // Re-enable auto-scroll when going to end
                 self.syscall_scroll = 0; // Will be set to max in draw()
-            },
+            }
             KeyCode::Char(' ') => {
                 // Toggle auto-scroll
                 self.auto_scroll = !self.auto_scroll;
-            },
+            }
             _ => {}
         }
         false
@@ -422,10 +418,10 @@ impl LiveMonitorApp {
     fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
 
-        // Split into two columns: 33% processes, 67% syscalls
+        // Split into two columns: 40% processes, 60% syscalls (wider to fit columns)
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(33), Constraint::Percentage(67)])
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
             .split(area);
 
         let (processes, process_count, syscalls) = match &self.current_state {
@@ -433,16 +429,19 @@ impl LiveMonitorApp {
                 let sorted_processes = state.processes_by_state();
                 let count = sorted_processes.len();
                 let process_items = create_process_state_items(&sorted_processes);
-                let syscall_lines: Vec<String> = state.recent_syscalls().into_iter().cloned().collect();
+                let syscall_lines: Vec<String> =
+                    state.recent_syscalls().into_iter().cloned().collect();
                 (process_items, count, syscall_lines)
             }
-            None => {
-                (vec![
+            None => (
+                vec![
                     ListItem::new("  PID   PPID  STATE  NAME"),
                     ListItem::new("  ---   ----  -----  ----"),
-                    ListItem::new("  Connecting to session...")
-                ], 0, vec![])
-            }
+                    ListItem::new("  Connecting to session..."),
+                ],
+                0,
+                vec![],
+            ),
         };
 
         // Left column: Process list
@@ -468,7 +467,7 @@ impl LiveMonitorApp {
             // Calculate scroll position
             let available_height = chunks[1].height.saturating_sub(2) as usize; // Subtract border
             let total_lines = syscalls.len();
-            
+
             let scroll_pos = if self.auto_scroll {
                 // Auto-scroll: show most recent lines
                 if total_lines > available_height {
@@ -481,7 +480,7 @@ impl LiveMonitorApp {
                 let max_scroll = total_lines.saturating_sub(available_height);
                 std::cmp::min(self.syscall_scroll as usize, max_scroll)
             };
-            
+
             // Extract visible lines
             let end_idx = std::cmp::min(scroll_pos + available_height, total_lines);
             let visible_lines = if scroll_pos < total_lines {
@@ -489,7 +488,7 @@ impl LiveMonitorApp {
             } else {
                 &[]
             };
-            
+
             (visible_lines.join("\n"), scroll_pos as u16)
         };
 
@@ -505,7 +504,11 @@ impl LiveMonitorApp {
         };
 
         let syscall_widget = Paragraph::new(syscall_text)
-            .block(Block::default().title(scroll_indicator).borders(Borders::ALL))
+            .block(
+                Block::default()
+                    .title(scroll_indicator)
+                    .borders(Borders::ALL),
+            )
             .wrap(Wrap { trim: true })
             .scroll((0, 0)); // Scroll is handled manually above
 
@@ -518,18 +521,15 @@ impl LiveMonitorApp {
             width: chunks[0].width - 2,
             height: 1,
         };
-        
+
         let help_text = "↑/↓ list, PgUp/PgDn scroll, SPACE auto, 'q' quit";
-        frame.render_widget(
-            Paragraph::new(help_text),
-            help_area,
-        );
+        frame.render_widget(Paragraph::new(help_text), help_area);
     }
 }
 
 /// Run the live TUI application
 async fn run_live_app(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, 
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut LiveMonitorApp,
     state_client: &mut StateClient,
 ) -> Result<()> {
@@ -552,7 +552,7 @@ async fn run_live_app(
                     }
                 }
             }
-            
+
             // Handle keyboard input
             input_result = tokio::task::spawn_blocking(|| -> Result<Option<KeyEvent>> {
                 if event::poll(Duration::from_millis(100))? {
@@ -592,14 +592,17 @@ async fn run_live_app(
 }
 
 /// Run the TUI application
-async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut MonitorApp) -> Result<()> {
+async fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut MonitorApp,
+) -> Result<()> {
     loop {
         // Draw UI
         terminal.draw(|frame| app.draw(frame))?;
 
         // Handle events with timeout for auto-refresh
         let timeout = app.refresh_rate.saturating_sub(app.last_refresh.elapsed());
-        
+
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {

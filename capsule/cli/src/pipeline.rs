@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use core::SyscallEvent;
-use io::StreamCoordinator;
+use io::{StreamCoordinator, StreamReceiver};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
@@ -60,6 +60,8 @@ impl Pipeline {
         // Create broadcast channels for pipeline communication
         let (tx_raw, _) = broadcast::channel::<String>(8192);
         let (tx_syscalls, _) = broadcast::channel::<SyscallEvent>(4096);
+        // Human-readable events channel
+        let (tx_human, _) = broadcast::channel::<String>(4096);
 
         // Ready synchronization - wait for all tasks to be ready
         let (ready_tx, mut ready_rx) = mpsc::channel::<()>(4); // Increased for state server
@@ -86,6 +88,16 @@ impl Pipeline {
             });
         }
 
+        // Start human events file sink (events.txt)
+        let human_receiver = StreamReceiver::new(PathBuf::from(&session_dir).join("events.jsonl"));
+        let human_handle = human_receiver.start(tx_human.subscribe(), self.cancellation_token.clone()).await?;
+        self.task_set.spawn(async move {
+            match human_handle.await {
+                Ok(result) => result,
+                Err(e) => Err(anyhow::anyhow!("Human events receiver failed: {}", e)),
+            }
+        });
+
         // Spawn trace task
         self.task_set.spawn(spawn_trace_task(
             cmdline,
@@ -102,7 +114,8 @@ impl Pipeline {
             self.cancellation_token.clone(),
         ));
 
-        // Spawn track task with shared state
+        // Attach human sender to tracker and spawn track task with shared state
+        let tracker = tracker.with_human_sender(tx_human.clone());
         self.task_set.spawn(spawn_track_task(
             tx_syscalls.subscribe(),
             tracker,

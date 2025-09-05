@@ -119,7 +119,7 @@ impl MonitorApp {
                 let count = sorted_processes.len();
                 let process_items = create_process_state_items(&sorted_processes);
                 let syscall_lines: Vec<String> =
-                    state.recent_syscalls().into_iter().cloned().collect();
+                    state.recent_human_events().into_iter().cloned().collect();
                 (process_items, count, syscall_lines)
             }
             Err(_) => {
@@ -137,7 +137,7 @@ impl MonitorApp {
 
         // Right column: Syscall stream
         let (syscall_text, _scroll_pos) = if syscalls.is_empty() {
-            ("Waiting for syscalls...".to_string(), 0)
+            ("Waiting for events...".to_string(), 0)
         } else {
             // Calculate scroll position
             let available_height = chunks[1].height.saturating_sub(2) as usize; // Subtract border
@@ -170,12 +170,12 @@ impl MonitorApp {
         // Update scroll position for display
         let scroll_indicator = if syscalls.len() > 0 {
             if self.auto_scroll {
-                " Live Syscalls [AUTO] "
+                " Live Events [AUTO] "
             } else {
-                " Live Syscalls [MANUAL] "
+                " Live Events [MANUAL] "
             }
         } else {
-            " Live Syscalls "
+            " Live Events "
         };
 
         let syscall_widget = Paragraph::new(syscall_text)
@@ -430,7 +430,7 @@ impl LiveMonitorApp {
                 let count = sorted_processes.len();
                 let process_items = create_process_state_items(&sorted_processes);
                 let syscall_lines: Vec<String> =
-                    state.recent_syscalls().into_iter().cloned().collect();
+                    state.recent_human_events().into_iter().cloned().collect();
                 (process_items, count, syscall_lines)
             }
             None => (
@@ -459,7 +459,7 @@ impl LiveMonitorApp {
         // Right column: Syscall stream
         let (syscall_text, _scroll_pos) = if syscalls.is_empty() {
             if self.current_state.is_some() {
-                ("Waiting for syscalls...".to_string(), 0)
+                ("Waiting for events...".to_string(), 0)
             } else {
                 ("Connecting to session...".to_string(), 0)
             }

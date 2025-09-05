@@ -4,15 +4,18 @@
 //! Shared between tracking and TUI components via Arc<RwLock>
 
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{Utc, DateTime, SecondsFormat, TimeZone};
 use core::{SyscallEvent, SyscallCategory, ProcessSyscall, ProcessEvent, ProcessEventType, DomainEvent};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
+mod human;
+use human::{HumanEventFilter, HumanEventKind, compose_process_event};
 
 /// Debug logging that goes to a file to avoid interfering with TUI
 macro_rules! debug_log {
@@ -87,6 +90,8 @@ pub struct AgentState {
     pub session_start: u64,
     /// Ring buffer of raw syscall lines for TUI display
     pub raw_syscalls: VecDeque<String>,
+    /// Ring buffer of enriched, human-readable activity lines for TUI and logs
+    pub human_events: VecDeque<String>,
 }
 
 /// Process tracker with shared state
@@ -95,6 +100,10 @@ pub struct ProcessTracker {
     state: Arc<RwLock<AgentState>>,
     /// Exit deduplication window (5 seconds)
     exit_window: Duration,
+    /// Optional broadcast for human-readable events
+    human_tx: Option<broadcast::Sender<String>>,
+    /// Filter controlling which human events are emitted
+    event_filter: HumanEventFilter,
 }
 
 impl LiveProcess {
@@ -149,6 +158,7 @@ impl AgentState {
             last_updated: now,
             session_start: now,
             raw_syscalls: VecDeque::new(),
+            human_events: VecDeque::new(),
         }
     }
 
@@ -166,6 +176,21 @@ impl AgentState {
     /// Get recent syscalls for TUI display (newest first)
     pub fn recent_syscalls(&self) -> Vec<&String> {
         self.raw_syscalls.iter().collect()
+    }
+
+    /// Add enriched human event line to buffer (bounded to 1000 entries)
+    pub fn add_human_event(&mut self, event_line: String) {
+        const MAX_EVENTS: usize = 1000;
+        if self.human_events.len() >= MAX_EVENTS {
+            self.human_events.pop_front();
+        }
+        self.human_events.push_back(event_line);
+        self.last_updated = Utc::now().timestamp_micros() as u64;
+    }
+
+    /// Get recent enriched events for TUI display (newest first)
+    pub fn recent_human_events(&self) -> Vec<&String> {
+        self.human_events.iter().collect()
     }
 
     /// Get all currently live processes (for TUI) sorted by PID ascending
@@ -363,8 +388,25 @@ impl ProcessTracker {
         let tracker = Self {
             state: state.clone(),
             exit_window: Duration::from_secs(5),
+            human_tx: None,
+            event_filter: HumanEventFilter::from_env_or_default(),
         };
         (tracker, state)
+    }
+}
+
+
+impl ProcessTracker {
+    /// Attach a broadcast sender for human-readable event lines
+    pub fn with_human_sender(mut self, tx: broadcast::Sender<String>) -> Self {
+        self.human_tx = Some(tx);
+        self
+    }
+
+    /// Override event filter
+    pub fn with_event_filter(mut self, filter: HumanEventFilter) -> Self {
+        self.event_filter = filter;
+        self
     }
 
     /// Main tracking loop - subscribe to ProcessEvent stream and raw syscalls
@@ -632,6 +674,13 @@ impl ProcessTracker {
                 self.handle_wait(&mut state, event.pid, child_pid, child_exit_code, &event)
                     .await?;
             }
+        }
+
+        // Compose and emit a human-readable message (respects filter)
+        if let Some((kind, message, extra)) = compose_process_event(&state, &event) {
+            self
+                .emit_human(&mut state, event.timestamp, event.pid, kind, message, extra)
+                .await;
         }
 
         state.last_updated = event.timestamp;
@@ -1086,5 +1135,51 @@ impl ProcessTracker {
     fn parse_waitpid_syscall(&self, args: &[String], result: Option<&str>) -> Option<(u32, Option<i32>)> {
         // Same parsing logic as wait4, just different syscall name
         self.parse_wait4_syscall(args, result)
+    }
+
+    /// Emit a human-readable event into state buffer and optional JSONL broadcast
+    async fn emit_human(
+        &self,
+        state: &mut AgentState,
+        timestamp: u64,
+        pid: u32,
+        kind: HumanEventKind,
+        message: String,
+        extra: serde_json::Value,
+    ) {
+        // Check filter
+        if !self.event_filter.is_enabled(kind) {
+            return;
+        }
+
+        // Resolve process_name (best-effort)
+        let process_name = state
+            .processes
+            .get(&pid)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        // Compose timestamp string (RFC3339 with microseconds)
+        let secs = (timestamp / 1_000_000) as i64;
+        let micros = (timestamp % 1_000_000) as u32;
+        let dt: DateTime<chrono::Utc> = chrono::Utc.timestamp(secs, micros * 1000);
+        let ts_str = dt.to_rfc3339_opts(SecondsFormat::Micros, true);
+
+        // Compose plain text: "<ts> <process_name> <pid> <message>"
+        let plain = format!("{} {} {} {}", ts_str, process_name, pid, message);
+        state.add_human_event(plain.clone());
+
+        // Broadcast JSON line to file sink if configured
+        if let Some(tx) = &self.human_tx {
+            let obj = json!({
+                "ts": timestamp,
+                "pid": pid,
+                "process_name": process_name,
+                "kind": kind.as_str(),
+                "message": message,
+                "extra": extra,
+            });
+            let _ = tx.send(obj.to_string());
+        }
     }
 }

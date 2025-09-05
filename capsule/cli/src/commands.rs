@@ -162,14 +162,12 @@ pub fn create_demo_state() -> Arc<RwLock<AgentState>> {
         }
     }
 
-    // Add some demo syscalls
-    state.add_syscall("execve(\"/usr/bin/claude\", [\"claude\", \"--version\"], 0x7fff5fbff7b0 /* 67 vars */) = 0".to_string());
-    state.add_syscall("write(1, \"Claude Code v1.0\\n\", 16) = 16".to_string());
-    state.add_syscall(
-        "openat(AT_FDCWD, \"/home/user/project/script.py\", O_RDONLY) = 3".to_string(),
-    );
-    state.add_syscall("read(3, \"#!/usr/bin/env python3\\n\", 4096) = 256".to_string());
-    state.add_syscall("clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f123456) = 1235".to_string());
+    // Add some demo human-readable events
+    state.add_human_event("PID 1234 executed: claude --version".to_string());
+    state.add_human_event("PID 1234 forked child 1235".to_string());
+    state.add_human_event("PID 1235 executed: python3 script.py".to_string());
+    state.add_human_event("PID 1236 executed: git status".to_string());
+    state.add_human_event("PID 1235 exited (code 0)".to_string());
 
     state.last_updated = now;
     Arc::new(RwLock::new(state))
